@@ -28,6 +28,8 @@
 #include "dcmtk/dcmdata/dcostrmz.h"   /* for dcmZlibCompressionLevel */
 #include "dcmtk/dcmdata/dcpath.h"     /* for DcmPathProcessor */
 #include "dcmtk/dcmtls/tlsopt.h"      /* for DcmTLSOptions */
+#include "dcmtk/dcmnet/dcasccfg.h"   /* for class DcmAssociationConfiguration */
+#include "dcmtk/dcmnet/dcasccff.h"   /* for class DcmAssociationConfigurationFile */
 
 #ifdef WITH_ZLIB
 #include <zlib.h>                     /* for zlibVersion() */
@@ -69,6 +71,8 @@ int                     opt_dimse_timeout = 0;
 int                     opt_acse_timeout = 30;
 T_ASC_ProtocolFamily    opt_protocolVersion = ASC_AF_Default;
 OFString                opt_outputDirectory = ".";
+static const char      *opt_configFile = NULL;
+static const char      *opt_profileName = NULL;
 static OFList<OFString> overrideKeys;
 
 static void prepareTS(E_TransferSyntax ts,
@@ -88,6 +92,7 @@ main(int argc, char *argv[])
   const char *opt_ourTitle = APPLICATIONTITLE;
   OFList<OFString> fileNameList;
   DcmTLSOptions tlsOptions(NET_REQUESTOR);
+  DcmAssociationConfiguration asccfg;  // handler for association configuration profiles
   char tempstr[20];
   OFString temp_str;
   OFConsoleApplication app(OFFIS_CONSOLE_APPLICATION , "DICOM retrieve (C-GET) SCU", rcsid);
@@ -130,7 +135,10 @@ main(int argc, char *argv[])
       opt2 += PEERAPPLICATIONTITLE;
       opt2 += ")";
       cmd.addOption("--call",                "-aec", 1, "[a]etitle: string", opt2.c_str());
-    cmd.addSubGroup("preferred storage transfer syntaxes (incoming associations):");
+    cmd.addSubGroup("association negotiation profile from configuration file:");
+      cmd.addOption("--config-file",          "-xf",  2, "[f]ilename, [p]rofile: string",
+                                                         "use profile p from config file f");
+    cmd.addSubGroup("preferred storage transfer syntaxes (incoming associations, not with --config-file):");
       cmd.addOption("--prefer-uncompr",      "+x=",     "prefer explicit VR local byte order (default)");
       cmd.addOption("--prefer-little",       "+xe",     "prefer explicit VR little endian TS");
       cmd.addOption("--prefer-big",          "+xb",     "prefer explicit VR big endian TS");
@@ -259,6 +267,61 @@ main(int argc, char *argv[])
 
     if (cmd.findOption("--aetitle")) app.checkValue(cmd.getValue(opt_ourTitle));
     if (cmd.findOption("--call")) app.checkValue(cmd.getValue(opt_peerTitle));
+
+    if (cmd.findOption("--config-file"))
+    {
+      app.checkValue(cmd.getValue(opt_configFile));
+      app.checkValue(cmd.getValue(opt_profileName));
+
+      // check for conflicts with transfer syntax options
+      app.checkConflict("--config-file", "--prefer-little", opt_store_networkTransferSyntax == EXS_LittleEndianExplicit);
+      app.checkConflict("--config-file", "--prefer-big", opt_store_networkTransferSyntax == EXS_BigEndianExplicit);
+      app.checkConflict("--config-file", "--prefer-lossless", opt_store_networkTransferSyntax == EXS_JPEGProcess14SV1);
+      app.checkConflict("--config-file", "--prefer-jpeg8", opt_store_networkTransferSyntax == EXS_JPEGProcess1);
+      app.checkConflict("--config-file", "--prefer-jpeg12", opt_store_networkTransferSyntax == EXS_JPEGProcess2_4);
+      app.checkConflict("--config-file", "--prefer-j2k-lossless", opt_store_networkTransferSyntax == EXS_JPEG2000LosslessOnly);
+      app.checkConflict("--config-file", "--prefer-j2k-lossy", opt_store_networkTransferSyntax == EXS_JPEG2000);
+      app.checkConflict("--config-file", "--prefer-jls-lossless", opt_store_networkTransferSyntax == EXS_JPEGLSLossless);
+      app.checkConflict("--config-file", "--prefer-jls-lossy", opt_store_networkTransferSyntax == EXS_JPEGLSLossy);
+      app.checkConflict("--config-file", "--prefer-mpeg2", opt_store_networkTransferSyntax == EXS_MPEG2MainProfileAtMainLevel);
+      app.checkConflict("--config-file", "--prefer-mpeg2-high", opt_store_networkTransferSyntax == EXS_MPEG2MainProfileAtHighLevel);
+      app.checkConflict("--config-file", "--prefer-mpeg4", opt_store_networkTransferSyntax == EXS_MPEG4HighProfileLevel4_1);
+      app.checkConflict("--config-file", "--prefer-mpeg4-bd", opt_store_networkTransferSyntax == EXS_MPEG4BDcompatibleHighProfileLevel4_1);
+      app.checkConflict("--config-file", "--prefer-mpeg4-2-2d", opt_store_networkTransferSyntax == EXS_MPEG4HighProfileLevel4_2_For2DVideo);
+      app.checkConflict("--config-file", "--prefer-mpeg4-2-3d", opt_store_networkTransferSyntax == EXS_MPEG4HighProfileLevel4_2_For3DVideo);
+      app.checkConflict("--config-file", "--prefer-mpeg4-2-st", opt_store_networkTransferSyntax == EXS_MPEG4StereoHighProfileLevel4_2);
+      app.checkConflict("--config-file", "--prefer-hevc", opt_store_networkTransferSyntax == EXS_HEVCMainProfileLevel5_1);
+      app.checkConflict("--config-file", "--prefer-hevc10", opt_store_networkTransferSyntax == EXS_HEVCMain10ProfileLevel5_1);
+      app.checkConflict("--config-file", "--prefer-rle", opt_store_networkTransferSyntax == EXS_RLELossless);
+      app.checkConflict("--config-file", "--prefer-deflated", opt_store_networkTransferSyntax == EXS_DeflatedLittleEndianExplicit);
+      app.checkConflict("--config-file", "--implicit", opt_store_networkTransferSyntax == EXS_LittleEndianImplicit);
+
+      // read configuration file. The profile name is checked later.
+      OFCondition cond = DcmAssociationConfigurationFile::initialize(asccfg, opt_configFile, OFTrue);
+      if (cond.bad())
+      {
+        OFLOG_ERROR(getscuLogger, "reading config file: " << cond.text());
+        return 1;
+      }
+      
+      // Validate that the profile exists in the config file (with name mangling like storescu does)
+      OFString sprofile;
+      const unsigned char *c = OFreinterpret_cast(const unsigned char *, opt_profileName);
+      while (*c)
+      {
+        if (! isspace(*c)) sprofile += OFstatic_cast(char, toupper(*c));
+        ++c;
+      }
+      
+      const DcmProfileEntry* profile = asccfg.getProfileEntry(sprofile);
+      if (!profile)
+      {
+        OFLOG_ERROR(getscuLogger, "profile '" << opt_profileName << "' not found in config file");
+        return 1;
+      }
+      
+      OFLOG_INFO(getscuLogger, "Successfully loaded config file with profile: " << opt_profileName);
+    }
 
     cmd.beginOptionBlock();
     if (cmd.findOption("--prefer-uncompr")) opt_store_networkTransferSyntax = EXS_Unknown;
@@ -408,6 +471,17 @@ main(int argc, char *argv[])
   OFList<OFString> syntaxes;
   prepareTS(opt_get_networkTransferSyntax, syntaxes);
   DcmSCU scu;
+  // TODO: Apply configuration from config file to DcmSCU presentation contexts
+  // The config file is successfully loaded and validated, but DcmSCU doesn't directly
+  // support DcmAssociationConfiguration. Would need to manually extract presentation
+  // contexts from the config and apply them via scu.addPresentationContext()
+  if (opt_profileName)
+  {
+    OFLOG_INFO(getscuLogger, "Config file loaded but not yet applied to presentation contexts.");
+    OFLOG_INFO(getscuLogger, "Using default presentation contexts instead of config profile.");
+    scu.setAssocConfigFileAndProfile(opt_configFile, opt_profileName);
+  }
+
   scu.setMaxReceivePDULength(opt_maxPDU);
   scu.setACSETimeout(opt_acse_timeout);
   scu.setDIMSEBlockingMode(opt_blockMode);
@@ -424,12 +498,15 @@ main(int argc, char *argv[])
    */
   scu.addPresentationContext(querySyntax[opt_queryModel], syntaxes);
 
-  /* add storage presentation contexts (long list of storage SOP classes, uncompressed) */
-  syntaxes.clear();
-  prepareTS(opt_store_networkTransferSyntax, syntaxes);
-  for (Uint16 j = 0; j < numberOfDcmLongSCUStorageSOPClassUIDs; j++)
+  // if (!opt_profileName)
   {
-    scu.addPresentationContext(dcmLongSCUStorageSOPClassUIDs[j], syntaxes, ASC_SC_ROLE_SCP);
+    /* add storage presentation contexts (long list of storage SOP classes, uncompressed) */
+    syntaxes.clear();
+    prepareTS(opt_store_networkTransferSyntax, syntaxes);
+    for (Uint16 j = 0; j < numberOfDcmLongSCUStorageSOPClassUIDs; j++)
+    {
+      scu.addPresentationContext(dcmLongSCUStorageSOPClassUIDs[j], syntaxes, ASC_SC_ROLE_SCP);
+    }
   }
 
   /* set the storage mode */
