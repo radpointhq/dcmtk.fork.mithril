@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2009-2022, OFFIS e.V.
+ *  Copyright (C) 2009-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -201,7 +201,9 @@ OFCondition I2DBmpSource::readBitmapHeader(Uint16 &width,
   if (tmp_height < 0) /* Is this a top down bitmap? */
   {
     isTopDown = OFTrue;
-    tmp_height = -tmp_height;
+    // Negate in the unsigned domain to avoid signed-overflow UB for INT_MIN.
+    // INT_MIN stays negative here and is rejected by the range check below.
+    tmp_height = OFstatic_cast(Sint32, 0 - OFstatic_cast(Uint32, tmp_height));
   }
   else
     isTopDown = OFFalse;
@@ -214,7 +216,8 @@ OFCondition I2DBmpSource::readBitmapHeader(Uint16 &width,
 
   if (tmp_width < 0) /* Width also can be signed, but no semantic */
   {
-    tmp_width = -tmp_width;
+    // Negate in the unsigned domain to avoid signed-overflow UB for INT_MIN.
+    tmp_width = OFstatic_cast(Sint32, 0 - OFstatic_cast(Uint32, tmp_width));
   }
   width = OFstatic_cast(Uint16, tmp_width);
   if (tmp_width <= 0 || tmp_width > OFstatic_cast(Sint32, UINT16_MAX))
@@ -229,6 +232,12 @@ OFCondition I2DBmpSource::readBitmapHeader(Uint16 &width,
     return EC_EndOfStream;
   bpp = tmp_word;
   DCMDATA_LIBI2D_DEBUG("I2DBmpSource: BMP bpp: " << OFstatic_cast(int, bpp));
+
+  /* Only these bit depths are supported. Reject everything else here, before
+   * any size computation (e.g. width * bpp) is performed, so that an attacker
+   * cannot use a large bpp value to overflow those calculations. */
+  if (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)
+    return makeOFCondition(OFM_dcmdata, 18, OF_error, "unsupported BMP file - invalid bpp");
 
   /* Compression info */
   if (readDWord(tmp_dword) != 0)
@@ -343,7 +352,7 @@ OFCondition I2DBmpSource::readBitmapData(
      row_length = (row_length + 3) & ~3
    */
 
-  const Uint32 row_length = ((width * bpp + 31) / 32) * 4;
+  const Uint32 row_length = ((OFstatic_cast(Uint32, width) * bpp + 31) / 32) * 4;
   Uint8 *row_data;
   Uint32 y;
   OFBool positive_direction;
@@ -373,13 +382,11 @@ OFCondition I2DBmpSource::readBitmapData(
     max = 0;
   }
 
-  Uint32 dims = width*height;
+  Uint32 dims = OFstatic_cast(Uint32, width) * OFstatic_cast(Uint32, height);
   if (!OFStandard::safeMult(dims, OFstatic_cast(Uint32, samplesPerPixel), length))
   {
     return makeOFCondition(OFM_dcmdata, 18, OF_error, "BMP dimensions too large, width*height*samplesPerPixel exceeds 32 bit length field");
   }
-
-  length = width * height * samplesPerPixel;
 
   DCMDATA_LIBI2D_DEBUG("I2DBmpSource: Starting to read bitmap data");
 
@@ -417,11 +424,11 @@ OFCondition I2DBmpSource::readBitmapData(
         cond = parseIndexedColorRow(row_data, width, bpp, colors, palette, isMonochrome, &pixData[posData]);
         break;
       case 16:
-        cond = parse16BppRow(row_data, width, &pixData[posData]);
+        cond = parse16BppRow(row_data, width, isMonochrome, &pixData[posData]);
         break;
       case 24:
       case 32:
-        cond = parse24_32BppRow(row_data, width, bpp, &pixData[posData]);
+        cond = parse24_32BppRow(row_data, width, bpp, isMonochrome, &pixData[posData]);
         break;
       default:
         cond = makeOFCondition(OFM_dcmdata, 18, OF_error, "unsupported BMP file - invalid bpp");
@@ -446,8 +453,14 @@ OFCondition I2DBmpSource::readBitmapData(
 OFCondition I2DBmpSource::parse24_32BppRow(const Uint8 *row,
                                            const Uint16 width,
                                            const int bpp,
+                                           OFBool isMonochrome,
                                            char *pixData) const
 {
+  /* If isMonochrome is true, the BMP file is invalid
+   * because a (monochrome) color palette is not permitted for 24 or 32 bits/pixel
+   */
+  if (isMonochrome) return EC_CorruptedData;
+
   /* We now must convert this line of the bmp file into the kind of data that
    * our caller expects. Each pixel consists of three bytes: blue, green, red
    * (notice the order!) pixel value. We convert this into "standard" RGB.
@@ -482,8 +495,14 @@ OFCondition I2DBmpSource::parse24_32BppRow(const Uint8 *row,
 
 OFCondition I2DBmpSource::parse16BppRow(const Uint8 *row,
                                         const Uint16 width,
+                                        OFBool isMonochrome,
                                         char *pixData) const
 {
+  /* If isMonochrome is true, the BMP file is invalid
+   * because a (monochrome) color palette is not permitted for 16 bits/pixel
+   */
+  if (isMonochrome) return EC_CorruptedData;
+
   /* We now must convert this line of the bmp file into the kind of data that
    * our caller expects. Each pixel consists of three bytes: blue, green, red
    * (notice the order!) pixel value. We convert this into "standard" RGB.
@@ -621,17 +640,11 @@ int I2DBmpSource::readLong(Sint32& result)
   if (readDWord(tmp) != 0)
     return EOF;
 
-  /* tmp is a two's complement (signed integer) and we have to convert it into that */
-  if (tmp & (1UL << 31))
-  {
-    /* If the highest bit is set, it is a negative number, convert it */
-    result = -(OFstatic_cast(Sint32, ~(tmp - 1)));
-  }
-  else
-  {
-    /* It is a positive number, no conversion necessary */
-    result = tmp;
-  }
+  /* Reinterpret the 32-bit two's-complement bit pattern as a signed integer.
+   * A direct unsigned-to-signed conversion yields the correct value across the
+   * whole Sint32 range (including INT_MIN for 0x80000000) and, unlike negating
+   * the magnitude, never invokes signed-overflow undefined behaviour. */
+  result = OFstatic_cast(Sint32, tmp);
 
   return 0;
 }

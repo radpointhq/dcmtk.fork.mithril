@@ -1,5 +1,9 @@
 # DCMTK
 
+[![Windows CI](https://github.com/DCMTK/dcmtk/actions/workflows/cmake-win.yml/badge.svg?branch=master)](https://github.com/DCMTK/dcmtk/actions/workflows/cmake-win.yml)
+[![macOS CI](https://github.com/DCMTK/dcmtk/actions/workflows/cmake-mac.yml/badge.svg?branch=master)](https://github.com/DCMTK/dcmtk/actions/workflows/cmake-mac.yml)
+[![Linux CI](https://github.com/DCMTK/dcmtk/actions/workflows/cmake-linux.yml/badge.svg?branch=master)](https://github.com/DCMTK/dcmtk/actions/workflows/cmake-linux.yml)
+
 This DICOM toolkit (DCMTK) package consists of source code, documentation and installation instructions for a set of software libraries and applications implementing part of the DICOM/MEDICOM Standard.
 
 DCMTK contains the following sub-packages, each in its own sub-directory:

@@ -1,0 +1,138 @@
+  name: C/C++ CI macOS
+
+  on:
+    push:
+      branches: [ "master"]
+    pull_request:
+      branches: [ "master"]
+    workflow_dispatch:
+
+  jobs:
+
+    build-macos:
+
+      runs-on: macos-latest
+      timeout-minutes: 30
+
+      steps:
+        - uses: actions/checkout@v4
+          with:
+            fetch-tags: false
+
+        - name: Install support libraries
+          run: |
+            brew install ninja openssl@3 libpng libtiff libxml2
+
+        - name: Prepare environment
+          run: |
+            echo "NOW=$(date +%Y%m%d)" >> "$GITHUB_ENV"
+            echo "COMMIT_SHORT_SHA=$(git rev-parse --short ${{ github.sha }})" >> "$GITHUB_ENV"
+            echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+            echo "LIBXML2_ROOT=$(brew --prefix libxml2)" >> "$GITHUB_ENV"
+            echo "BREW_PREFIX=$(brew --prefix)" >> "$GITHUB_ENV"
+
+        - name: Configure project
+          run: |
+            ls ${{ github.workspace }}
+            echo "WORKSPACE dir: ${{ github.workspace }}"
+            cmake --version
+            mkdir ${{ github.workspace }}/dcmtk-build
+            cd ${{ github.workspace }}/dcmtk-build
+            cmake -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DDCMTK_MODULES:STR="ofstd;oflog;oficonv;dcmdata;dcmimgle;dcmimage;dcmjpeg;dcmjpls;dcmtls;dcmnet;dcmsr;dcmsign;dcmwlm;dcmqrdb;dcmpstat;dcmrt;dcmiod;dcmfg;dcmseg;dcmtract;dcmpmap;dcmect;dcmapps" \
+              -DDCMTK_ENABLE_BUILTIN_OFICONV_DATA:BOOL=ON \
+              -DBUILD_SHARED_LIBS:BOOL=ON \
+              -DCMAKE_PREFIX_PATH:PATH="${{ env.BREW_PREFIX }};${{ env.LIBXML2_ROOT }}" \
+              -DOPENSSL_ROOT_DIR:PATH=${{ env.OPENSSL_ROOT_DIR }} \
+              -DCMAKE_INSTALL_PREFIX:PATH=${{ github.workspace }}/dcmtk-${{ env.NOW }}-${{ env.COMMIT_SHORT_SHA }} \
+              ${{ github.workspace }}
+
+        - name: Build dcmtk
+          run: |
+            cd ${{ github.workspace }}/dcmtk-build
+            cmake --build . -j
+
+        - name: Shorten runner hostname
+          # macOS GitHub runners use long .local hostnames that exceed
+          # DCMTK's 62-character DIC_NODENAME limit, causing dcmnet/dcmtls
+          # SCU tests to fail in DcmSCU::initNetwork(). Override before tests.
+          run: |
+            sudo scutil --set HostName mac-ci
+            sudo scutil --set LocalHostName mac-ci
+            sudo scutil --set ComputerName mac-ci
+            sudo hostname mac-ci
+            hostname
+
+        - name: Test dcmtk
+          run: |
+            cd ${{ github.workspace }}/dcmtk-build
+            ctest -VV --no-compress-output --output-on-failure
+
+        - name: Install dcmtk
+          run: |
+            cd ${{ github.workspace }}/dcmtk-build
+            cmake --build . --target install
+            cd ${{ github.workspace }}
+            tar -czf "${{ github.workspace }}/dcmtk-${{ env.NOW }}-${{ env.COMMIT_SHORT_SHA }}-macos-arm64.tar.gz" \
+              -C ${{ github.workspace }} "dcmtk-${{ env.NOW }}-${{ env.COMMIT_SHORT_SHA }}"
+            echo "Listing install dir: ${{ github.workspace }}/dcmtk-${{ env.NOW }}-${{ env.COMMIT_SHORT_SHA }}"
+            ls "${{ github.workspace }}/dcmtk-${{ env.NOW }}-${{ env.COMMIT_SHORT_SHA }}"
+
+        - uses: actions/upload-artifact@v4
+          with:
+              name: dcmtk-install-tarball-macos
+              path: ${{ github.workspace }}/dcmtk-*-macos-arm64.tar.gz
+
+    publish-macos:
+
+      runs-on: macos-latest
+      timeout-minutes: 5
+      # Only run if the event is not a pull request and the repository owner is DCMTK.
+      # The latter is to prevent forks from publishing packages even if the owner's token
+      # would have sufficient privileges.
+      if: ${{ (github.event_name != 'pull_request') && (github.repository_owner == 'DCMTK')}}
+
+      needs: build-macos
+
+      steps:
+        - uses: actions/checkout@v4
+          with:
+            fetch-tags: true
+        - uses: actions/download-artifact@v4
+          with:
+            name: dcmtk-install-tarball-macos
+            path: ${{ github.workspace }}/dcmtk-install
+        - uses: actions/setup-python@v5
+          with:
+            python-version: '3.11'
+
+        - name: Publish package
+          run: |
+            echo "Listing install dir: ${{ github.workspace }}/dcmtk-install"
+            ls ${{ github.workspace }}/dcmtk-install
+            pip install -U "scikit-ci-addons>=0.22.0"
+            ci_addons publish_github_release DCMTK/dcmtk \
+              --exit-success-if-missing-token \
+              --release-packages "${{ github.workspace }}/dcmtk-install/dcmtk-*-macos-arm64.tar.gz" \
+              --prerelease-packages "${{ github.workspace }}/dcmtk-install/dcmtk-*-macos-arm64.tar.gz" \
+              --prerelease-packages-clear-pattern "dcmtk-*-macos-arm64.tar.gz" \
+              --prerelease-packages-keep-pattern "*<COMMIT_SHORT_SHA>*" \
+              --token ${{ secrets.RELEASE_DCMTK_TOKEN }}
+
+        # Move the "latest" tag to the commit just built. ci_addons used to do
+        # this (--prerelease-sha) via a temporary tag "latest-tmp", which raced
+        # with the publish jobs of the other platforms: a job that fetched the
+        # tags while "latest-tmp" existed mistook it for a release tag and
+        # created a regular release named "latest-tmp". A forced update of the
+        # ref is a single atomic call and idempotent, so it is safe when several
+        # jobs do it for the same commit. Skipped if the commit carries a real
+        # release tag (e.g. DCMTK-3.7.1): ci_addons then created a release
+        # instead of updating the "latest" pre-release, which stays as it is.
+        - name: Point "latest" tag to this commit
+          env:
+            GH_TOKEN: ${{ secrets.RELEASE_DCMTK_TOKEN }}
+          run: |
+            if [ -z "$(git tag --points-at HEAD | grep -v '^latest$')" ]; then
+              gh api -X PATCH repos/DCMTK/dcmtk/git/refs/tags/latest -f sha=${{ github.sha }} -F force=true
+            fi

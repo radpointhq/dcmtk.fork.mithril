@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -24,6 +24,19 @@
 #include "dcmtk/dcmiod/iodutil.h"
 #include "dcmtk/dcmdata/dcvrdt.h"
 #include "dcmtk/dcmdata/dcvrds.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+OFshared_ptr<IODRules> s_defaultRules;
+OFMutex s_defaultRulesMutex;
+}
 
 const OFString IODEnhUSImageModule::m_ModuleName = "EnhancedUSImageModule";
 
@@ -60,49 +73,60 @@ OFString IODEnhUSImageModule::getName() const
 
 void IODEnhUSImageModule::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_ImageType, "4", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_SamplesPerPixel, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "1"), OFTrue);
-    m_Rules->addRule(
-        new IODRule(DCM_PhotometricInterpretation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "MONOCHROME2"), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Rows, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Columns, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BitsAllocated, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BitsStored, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_HighBit, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PixelRepresentation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "0"), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DimensionOrganizationType, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_AcquisitionDateTime, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_AcquisitionDuration, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PixelSpacing, "2", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PositionMeasuringDeviceUsed, "1", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_LossyImageCompression, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_LossyImageCompressionRatio, "1-n", "1C", getName(), DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_LossyImageCompressionMethod, "1-n", "1C", getName(), DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PresentationLUTShape, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "IDENTITY"),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RescaleSlope, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "1"), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RescaleIntercept, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "0"), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BurnedInAnnotation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "NO"), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RecognizableVisualFeatures, "1", "3", getName(), DcmIODTypes::IE_IMAGE, "NO"),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_TransducerScanPatternCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_TransducerGeometryCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_TransducerBeamSteeringCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_TransducerApplicationCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ProcessingFunction, "1", "3", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_MechanicalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BoneThermalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_CranialThermalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_SoftTissueThermalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DepthsOfFocus, "1-n", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DepthOfScanField, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+    s_defaultRulesMutex.lock();
+    if (!s_defaultRules)
+    {
+        s_defaultRules.reset(new IODRules());
+        // parameters are tag, VM, type. Overwrite old rules if any.
+        s_defaultRules->addRule(new IODRule(DCM_ImageType, "4", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_SamplesPerPixel, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "1"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_PhotometricInterpretation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "MONOCHROME2"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_Rows, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_Columns, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_BitsAllocated, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_BitsStored, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_HighBit, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_PixelRepresentation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "0"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_DimensionOrganizationType, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_AcquisitionDateTime, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_AcquisitionDuration, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_PixelSpacing, "2", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_PositionMeasuringDeviceUsed, "1", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_LossyImageCompression, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_LossyImageCompressionRatio, "1-n", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_LossyImageCompressionMethod, "1-n", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_PresentationLUTShape, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "IDENTITY"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_RescaleSlope, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "1"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_RescaleIntercept, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "0"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_BurnedInAnnotation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "NO"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_RecognizableVisualFeatures, "1", "3", getName(), DcmIODTypes::IE_IMAGE, "NO"), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_TransducerScanPatternCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_TransducerGeometryCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_TransducerBeamSteeringCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_TransducerApplicationCodeSequence, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_ProcessingFunction, "1", "3", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_MechanicalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_BoneThermalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_CranialThermalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_SoftTissueThermalIndex, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_DepthsOfFocus, "1-n", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_DepthOfScanField, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+    }
+    s_defaultRulesMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_defaultRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_defaultRules->begin();
+        while (it != s_defaultRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 IODEnhUSImageModule::~IODEnhUSImageModule()

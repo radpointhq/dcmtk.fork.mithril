@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2018, J. Riesmeier, Oldenburg, Germany
+ *  Copyright (C) 2015-2026, J. Riesmeier, Oldenburg, Germany
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -192,7 +192,8 @@ OFCondition DSRIncludedTemplateTreeNode::write(DcmItem & /*dataset*/,
 OFCondition DSRIncludedTemplateTreeNode::readXML(const DSRXMLDocument & /*doc*/,
                                                  DSRXMLCursor /*cursor*/,
                                                  const E_DocumentType /*documentType*/,
-                                                 const size_t /*flags*/)
+                                                 const size_t /*flags*/,
+                                                 const size_t /*depth*/)
 {
     /* invalid: cannot read document with included templates */
     return SR_EC_CannotProcessIncludedTemplates;

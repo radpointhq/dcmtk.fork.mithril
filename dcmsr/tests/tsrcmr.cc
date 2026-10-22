@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, J. Riesmeier, Oldenburg, Germany
+ *  Copyright (C) 2015-2026, J. Riesmeier, Oldenburg, Germany
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -359,6 +359,17 @@ OFTEST(dcmsr_TID1500_MeasurementReport)
     }
     OFCHECK(volMeasurements.setReferencedSegment(segment).good());
     OFCHECK(volMeasurements.setReferencedSegment(DSRImageReferenceValue(UID_SegmentationStorage, "1.0")).bad());
+    /* a label map segmentation is accepted, an image is not */
+    DSRImageReferenceValue labelMap(UID_LabelMapSegmentationStorage, "1.0.2.0.3.1");
+    labelMap.getSegmentList().addItem(1);
+    OFCHECK(volMeasurements.setReferencedSegment(labelMap).good());
+    DSRImageReferenceValue image(UID_CTImageStorage, "1.0.2.0.3.2");
+    image.getSegmentList().addItem(1);
+    OFCHECK(volMeasurements.setReferencedSegment(image) == CMR_EC_InvalidSegmentationObject);
+    /* the same for the dataset of a label map segmentation */
+    OFCHECK(dataset.putAndInsertString(DCM_SOPClassUID, UID_LabelMapSegmentationStorage).good());
+    OFCHECK(volMeasurements.setReferencedSegment(dataset, 1).good());
+    OFCHECK(dataset.putAndInsertString(DCM_SOPClassUID, UID_SurfaceSegmentationStorage).good());
     OFCHECK(volMeasurements.setReferencedSegment(dataset, 1).good());
     dataset.clear();
     OFCHECK(dataset.putAndInsertString(DCM_SOPClassUID, UID_RealWorldValueMappingStorage).good());
@@ -425,9 +436,11 @@ OFTEST(dcmsr_TID1500_MeasurementReport)
     DSRDocument doc;
     OFCHECK(!doc.isValid());
     OFCHECK_EQUAL(doc.getDocumentType(), DSRTypes::DT_BasicTextSR);
+    OFCHECK(doc.getTree().hasConstraintChecker());
     OFCHECK(doc.setTreeFromRootTemplate(report, OFFalse /*expandTree*/).good());
     OFCHECK(doc.isValid());
     OFCHECK_EQUAL(doc.getDocumentType(), DSRTypes::DT_EnhancedSR);
+    OFCHECK(doc.getTree().hasConstraintChecker());
     /* now, do the same with an expanded document tree */
     OFCHECK(doc.setTreeFromRootTemplate(report, OFTrue  /*expandTree*/).good());
     OFCHECK(doc.isValid());
@@ -473,6 +486,7 @@ OFTEST(dcmsr_TID1500_MeasurementReport_minimal)
     DSRDocument doc;
     OFCHECK(doc.setTreeFromRootTemplate(report, OFTrue /*expandTree*/).good());
     OFCHECK(doc.isValid());
+    OFCHECK(doc.getTree().hasConstraintChecker());
 
     /* remove empty "Imaging Measurements" (TID 1500 - Row 6) CONTAINER */
     OFCHECK_EQUAL(doc.getTree().countNodes(), 7);

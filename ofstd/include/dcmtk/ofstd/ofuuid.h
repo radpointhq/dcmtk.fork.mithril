@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2011-2024, OFFIS e.V.
+ *  Copyright (C) 2011-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -13,9 +13,10 @@
  *
  *  Module:  ofstd
  *
- *  Author:  Uli Schlachter
+ *  Author:  Uli Schlachter, Harald Roesen
  *
- *  Purpose: Definitions for generating UUIDs, as defined by ITU-T X.667
+ *  Purpose: Definition of a Universally Unique IDentifier (UUID),
+ *           based on RFC 9562, section 5.7.
  *
  */
 
@@ -24,125 +25,223 @@
 
 #include "dcmtk/config/osconfig.h"    /* make sure OS specific configuration is included first */
 
-#include "dcmtk/ofstd/oftypes.h"
-#include "dcmtk/ofstd/ofstring.h"
-#include "dcmtk/ofstd/ofstream.h"
 #include "dcmtk/ofstd/ofrand.h"
+#include "dcmtk/ofstd/ofstream.h"
+#include "dcmtk/ofstd/ofstring.h"
+#include "dcmtk/ofstd/oftypes.h"
 
-/** Helper class for generating and storing UUIDs, as specified in ITU-T X.667.
- *  A UUID is an Universally Unique IDentifier. If UUIDs are generated
- *  correctly, it's almost impossible that the same UUID is generated twice.
- *  @warning The implementation of this class still contains a few "FIXME"
- *    comments and should, therefore, not be used in productive environments
- *    as long as these corrections have not yet been implemented.
+
+/**
+ *  An OFUUID represents a Universally Unique Identifier (UUID) as described in
+ *  <a href="https://www.rfc-editor.org/info/rfc9562">RFC 9562</a>. The constants
+ *  @ref OFUUID::nil and @ref OFUUID::max do not comply to
+ *  <a href="https://www.rfc-editor.org/info/rfc9562">RFC 9562</a> but may be
+ *  considered UUIDs nonetheless. See <a href="https://www.rfc-editor.org/info/rfc9562">RFC 9562</a>,
+ *  sections 5.9 and 5.10 for details.
  */
 class DCMTK_OFSTD_EXPORT OFUUID {
 public:
+  /**
+   *  Means to create an OFUUID.
+   */
+  friend class OFUUIDGenerator;
 
-    /** The possible ways to represent a UUID */
-    enum E_Representation {
-        /** The UUID is printed as one, long integer in base 10 (up to 39 digits long) */
-        ER_RepresentationInteger,
-        /** The UUID is printed in hexadecimal notation with hyphens (-) separating groups */
-        ER_RepresentationHex,
-        /** The UUID is printed as one, long integer with the prefix "2.25." */
-        ER_RepresentationOID,
-        /** The UUID is printed in hexadecimal notation with the prefix "urn:uuid:" */
-        ER_RepresentationURN,
-        /** The default representation that is used when none is given */
-        ER_RepresentationDefault = ER_RepresentationHex
-    };
+  /**
+   *  Writes an OFUUID to a stream in canonical notation.
+   *  @param os The stream to write to.
+   *  @param uuid The OFUUID to write.
+   *
+   *  @return \p os
+   */
+  friend DCMTK_OFSTD_EXPORT STD_NAMESPACE ostream & operator<<(STD_NAMESPACE ostream & os, OFUUID const & uuid);
 
-    struct BinaryRepresentation {
-        Uint8 value[16];
-    };
+  /**
+   *  Equality operator.
+   *  @param lhs The left OFUUID for comparison.
+   *  @param rhs The right OFUUID for comparison.
+   *
+   *  @return OFTrue iff lhs' and rhs' integer notations are mathematically equal.
+   */
+  friend DCMTK_OFSTD_EXPORT OFBool operator==(OFUUID const & lhs, OFUUID const & rhs);
 
-    /** Default constructor. Generates a new UUID. */
-    OFUUID();
+  /**
+   *  Inequality operator.
+   *  @param lhs The left OFUUID for comparison.
+   *  @param rhs The right OFUUID for comparison.
+   *
+   *  @return OFTrue iff lhs' and rhs' integer notations are mathematically unequal.
+   */
+  friend DCMTK_OFSTD_EXPORT OFBool operator!=(OFUUID const & lhs,OFUUID const & rhs);
 
-    /** Construct a new UUID from its binary representation.
-     *  @param val the binary representation
-     *  @see getBinaryRepresentation
+  /**
+   *  Less than operator.
+   *  @param lhs The left OFUUID for comparison.
+   *  @param rhs The right OFUUID for comparison.
+   *
+   *  @return OFTrue iff lhs' integer notation is mathematically smaller than rhs' integer notation.
+   */
+  friend DCMTK_OFSTD_EXPORT OFBool operator<(OFUUID const & lhs, OFUUID const & rhs);
+
+  /**
+   *  Less than or equal to operator.
+   *  @param lhs The left OFUUID for comparison.
+   *  @param rhs The right OFUUID for comparison.
+   *
+   *  @return OFTrue iff lhs' integer notation is mathematically less than or equal to rhs' integer notation.
+   */
+  friend DCMTK_OFSTD_EXPORT OFBool operator<=(OFUUID const & lhs, OFUUID const & rhs);
+
+  /**
+   *  Greater than operator.
+   *  @param lhs The left OFUUID for comparison.
+   *  @param rhs The right OFUUID for comparison.
+   *
+   *  @return OFTrue iff lhs' integer notation is mathematically bigger than rhs' integer notation.
+   */
+  friend DCMTK_OFSTD_EXPORT OFBool operator>(OFUUID const & lhs, OFUUID const & rhs);
+
+  /**
+   *  Greater than or equal to operator.
+   *  @param lhs The left OFUUID for comparison.
+   *  @param rhs The right OFUUID for comparison.
+   *
+   *  @return OFTrue iff lhs' integer notation is mathematically bigger than or equal to rhs' integer notation.
+   */
+  friend DCMTK_OFSTD_EXPORT OFBool operator>=(OFUUID const & lhs, OFUUID const & rhs);
+
+  /** The possible notations of an OFUUID. */
+  typedef enum {
+    /** The OFUUID is represented as one, long (unsigned) integer in base 10 (up to 39 digits long). */
+    NotationInteger,
+
+    /**
+     * The OFUUID is represented in the canonical "hex-and-dash" format consisting of multiple
+     * groups of lowercase alphanumeric hexadecimal characters separated by single dashes/hyphens.
      */
-    OFUUID(const struct BinaryRepresentation& val);
+    NotationCanonical,
 
-    /* This class uses the default assignment operator */
-
-    /** Generate a new UUID. The old UUID is discarded. */
-    void generate();
-
-    /** Get the string representation of this UUID.
-     *  @param result string instance to save the result in
-     *  @param representation the representation to use
-     *  @return result
+    /**
+     *  The OFUUID is represented in integer notation with the prefix <em>2.25.</em>
      */
-    OFString& toString(OFString& result, E_Representation representation = ER_RepresentationDefault) const;
+    NotationOID,
 
-    /** Write the string representation of this UUID to a stream.
-     *  @param stream the output stream to write to
-     *  @param representation the representation to use
-     *  @return stream
+    /**
+     *  The OFUUID is represented in canonical notation with the prefix <em>urn:uuid:</em>.
      */
-    STD_NAMESPACE ostream& print(STD_NAMESPACE ostream& stream, E_Representation representation = ER_RepresentationDefault) const;
+    NotationURN,
 
-    /** Get the binary representation of this UUID.
-     *  @param val the structure where the result should be saved to
+    /**
+     *  The default notation that is used when none is given.
      */
-    void getBinaryRepresentation(struct BinaryRepresentation& val) const;
+    NotationDefault = NotationCanonical
+  } Notation;
 
-    /** Compare this instance to another OFUUID instance.
-     *  @param other the other instance
-     *  @return OFTrue if both UUIDs are equal.
-     */
-    OFBool operator==(const OFUUID& other) const;
+  /**
+   *  A OFFUID with all bits set to zero (0).
+   */
+  static OFUUID const nil;
 
-    /** Compare this instance to another OFUUID instance.
-     *  @param other the other instance
-     *  @return OFFalse if both UUIDs are equal.
-     */
-    OFBool operator!=(const OFUUID& other) const
-    {
-        return !(*this == other);
-    }
+  /**
+   *  A OFFUID with all bits set to one (1).
+   */
+  static OFUUID const max;
+
+  /**
+   * Destructor.
+   */
+  virtual ~OFUUID();
+
+  /**
+   *  Writes a string representation of this OFUUID to a stream.
+   *  @param os The stream to write to.
+   *  @param notation The Notation to use.
+   *
+   *  @return \p os
+   */
+  STD_NAMESPACE ostream & print(STD_NAMESPACE ostream & os, Notation const notation = NotationDefault) const;
+
+  /**
+   *  Returns a string representation of this OFUUID.
+   *  @param notation The notation to use.
+   *
+   *  @return An OFString representing the current OFUUID.
+   */
+  OFString toString(Notation const notation = OFUUID::NotationDefault) const;
 
 private:
+  /**
+   *  Given:
+   *  \code{.cc}
+   *  Uint8 m = n + r * 2^8;
+   *  \endcode
+   *
+   *  This calculates the integer quotient q := m / 10 and
+   *  the integer remainder r := m % 10.
+   *  @param[in] n     The first summand of m (see above).
+   *  @param[out] q    The calculated quotient.
+   *  @param[in,out] r
+   *  A factor of the second summand of m (see above). [in]\n
+   *  The calculated remainder. [out]
+   */
+  static void divideBy10(Uint8 const n, Uint8 & q, Uint8 & r);
 
-    /** Print the integer representation to the given stream.
-     *  @param stream stream to print to.
-     */
-    void printInteger(STD_NAMESPACE ostream& stream) const;
+  /**
+   *  The number of Uint8 octets that make up this OFUUID.
+   */
+  static size_t const DATA_LENGTH = 16;
 
-    /** Print the hexadecimal representation to the given stream.
-     *  @param stream stream to print to.
-     */
-    void printHex(STD_NAMESPACE ostream& stream) const;
+  /**
+   *  Constructor.
+   *  @param fill Value to be assigned to each array member of @ref data_.
+   *
+   *  To create an OFUUID use OFUUIDGenerator::create().
+   */
+  OFUUID(Uint8 const fill = 0);
 
-    /* The fields of an UUID, as defined by ITU-T X.667 */
+  /**
+   *  Copy constructor.
+   */
+  OFUUID(OFUUID const & other);
 
-    /** Octets 0-3 of the time field */
-    Uint32 time_low;
-    /** Octets 4-5 of the time field */
-    Uint16 time_mid;
-    /** 4 bits for the version and the 12 highest bits of the time */
-    Uint16 version_and_time_high;
-    /** 2 bits for the variant and the 6 highest bits of the clock sequence */
-    Uint8 variant_and_clock_seq_high;
-    /** The lowest 8 bits of the clock sequence */
-    Uint8 clock_seq_low;
-    /** The node value in the form of a MAC address */
-    Uint8 node[6];
-    /** Pseudo random number generator */
-    OFRandom rnd;
-};
+  /**
+   *  Copy assignment.
+   */
+  OFUUID & operator=(OFUUID const & rhs);
 
-/** Print an UUID to a stream with OFUUID::ER_RepresentationDefault.
- *  @param stream the output stream to use
- *  @param uuid the UUID to print
- *  @return stream
- */
-static inline STD_NAMESPACE ostream& operator<< (STD_NAMESPACE ostream& stream, const OFUUID& uuid)
-{
-    return uuid.print(stream);
-}
+  /**
+   *  Checks if this OFUUID is equal to @ref OFUUID::max.
+   *  See <a href="https://www.rfc-editor.org/info/rfc9562"> RFC 9562</a>,
+   *  section 5.10 for details.
+   *
+   *  @return OFTrue iff all bits of @ref data_ are one (1).
+   */
+  OFBool isMax() const;
 
-#endif
+  /**
+   *  Checks if this OFUUID is equal to @ref OFUUID::nil.
+   *  See <a href="https://www.rfc-editor.org/info/rfc9562"> RFC 9562</a>,
+   *  section 5.9 for details.
+   *
+   *  @return OFTrue iff all bits of @ref data_ are zero (0).
+   */
+  OFBool isNil() const;
+
+  /**
+   *  Writes the OFUUID in canonical notation to a stream.
+   *  @param os The stream to write to.
+   */
+  void printCanonical(STD_NAMESPACE ostream & os) const;
+
+  /**
+   *  Writes the OFUUID in integer notation to a stream.
+   *  @param os The stream to write to.
+   */
+  void printInteger(STD_NAMESPACE ostream & os) const;
+
+  /**
+   *  The data that makes up an OFUUID.
+   */
+  Uint8 data_[DATA_LENGTH];
+}; // OFUUID
+
+#endif // OFUUID_H

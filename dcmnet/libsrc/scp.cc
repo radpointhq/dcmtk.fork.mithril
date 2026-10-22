@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2009-2025, OFFIS e.V.
+ *  Copyright (C) 2009-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -32,6 +32,7 @@ DcmSCP::DcmSCP()
 : m_network(NULL)
 , m_assoc(NULL)
 , m_cfg()
+, m_maxNestingDepth(0)
 {
     OFStandard::initializeNetwork();
 }
@@ -1167,39 +1168,39 @@ OFCondition DcmSCP::receiveACTIONRequest(T_DIMSE_N_ActionRQ& reqMessage,
     else
         DCMNET_INFO("Received N-ACTION Request (MsgID " << reqMessage.MessageID << ")");
 
-    // Check if dataset is announced correctly
-    if (reqMessage.DataSetType == DIMSE_DATASET_NULL)
+    // N-ACTION may or may not carry a dataset (PS3.7 10.1.4).
+    if (reqMessage.DataSetType != DIMSE_DATASET_NULL)
     {
-        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
-        DCMNET_ERROR("Received N-ACTION request but no dataset announced, aborting");
-        return DIMSE_BADMESSAGE;
-    }
+        // Receive dataset
+        cond = receiveDIMSEDataset(&presIDdset, &dataset);
+        if (cond.bad())
+        {
+            DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
+            DCMNET_ERROR("Unable to receive N-ACTION dataset on presentation context "
+                         << OFstatic_cast(unsigned int, presID));
+            return DIMSE_BADDATA;
+        }
 
-    // Receive dataset
-    cond = receiveDIMSEDataset(&presIDdset, &dataset);
-    if (cond.bad())
-    {
-        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
-        DCMNET_ERROR("Unable to receive N-ACTION dataset on presentation context "
-                     << OFstatic_cast(unsigned int, presID));
-        return DIMSE_BADDATA;
-    }
+        // Output request message only if trace level is enabled
+        if (DCM_dcmnetLogger.isEnabledFor(OFLogger::TRACE_LOG_LEVEL))
+            DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, dataset, presID));
+        else
+            DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
 
-    // Output request message only if trace level is enabled
-    if (DCM_dcmnetLogger.isEnabledFor(OFLogger::TRACE_LOG_LEVEL))
-        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, dataset, presID));
+        // Compare presentation context ID of command and data set
+        if (presIDdset != presID)
+        {
+            DCMNET_ERROR("Presentation Context ID of command (" << OFstatic_cast(unsigned int, presID) << ") and data set ("
+                                                                << OFstatic_cast(unsigned int, presIDdset) << ") differs");
+            delete dataset;
+            return makeDcmnetCondition(DIMSEC_INVALIDPRESENTATIONCONTEXTID,
+                                       OF_error,
+                                       "DIMSE: Presentation Contexts of Command and Data Set differ");
+        }
+    }
     else
-        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
-
-    // Compare presentation context ID of command and data set
-    if (presIDdset != presID)
     {
-        DCMNET_ERROR("Presentation Context ID of command (" << OFstatic_cast(unsigned int, presID) << ") and data set ("
-                                                            << OFstatic_cast(unsigned int, presIDdset) << ") differs");
-        delete dataset;
-        return makeDcmnetCondition(DIMSEC_INVALIDPRESENTATIONCONTEXTID,
-                                   OF_error,
-                                   "DIMSE: Presentation Contexts of Command and Data Set differ");
+        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
     }
 
     // Set return values
@@ -1249,6 +1250,99 @@ OFCondition DcmSCP::sendACTIONResponse(const T_ASC_PresentationContextID presID,
     if (cond.bad())
     {
         DCMNET_ERROR("Failed sending N-ACTION response: " << DimseCondition::dump(tempStr, cond));
+    }
+
+    return cond;
+}
+
+// ----------------------------------------------------------------------------
+
+// -- N-GET --
+
+OFCondition DcmSCP::receiveNGETRequest(T_DIMSE_N_GetRQ& reqMessage,
+                                       const T_ASC_PresentationContextID presID,
+                                       OFList<DcmTagKey>& attributeIdentifierList)
+{
+    // Do some basic validity checks
+    if (m_assoc == NULL)
+        return DIMSE_ILLEGALASSOCIATION;
+
+    OFString tempStr;
+
+    if (DCM_dcmnetLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
+        DCMNET_INFO("Received N-GET Request");
+    else
+        DCMNET_INFO("Received N-GET Request (MsgID " << reqMessage.MessageID << ")");
+
+    // N-GET carries no separate dataset (PS3.7 Section 10.3.4): the Attribute Identifier List
+    // is encoded inside the command set and has already been parsed by DIMSE_receiveCommand.
+    DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, reqMessage, DIMSE_INCOMING, NULL, presID));
+
+    // Convert the flat (group, element) DIC_US array to a list of DcmTagKey.
+    // ListCount holds the total number of DIC_US values, i.e. 2 per tag.
+    attributeIdentifierList.clear();
+    const int count = reqMessage.ListCount;
+    const DIC_US* list = reqMessage.AttributeIdentifierList;
+    if (list != NULL && count > 0)
+    {
+        for (int i = 0; i + 1 < count; i += 2)
+            attributeIdentifierList.push_back(DcmTagKey(list[i], list[i + 1]));
+    }
+    // An empty list means no Attribute Identifier List was specified; per PS3.7 Section 10.1.2.1.5
+    // all attributes are assumed in that case.
+
+    // Free the Attribute Identifier List buffer that DIMSE_receiveCommand() allocated
+    // while parsing the N-GET-RQ command set (see getAttributeList() in dimcmd.cc).
+    // T_DIMSE_Message has no destructor, so without this the buffer would leak on every
+    // N-GET request, allowing a remote peer to exhaust the SCP's memory.
+    if (reqMessage.AttributeIdentifierList != NULL)
+    {
+        free(reqMessage.AttributeIdentifierList);
+        reqMessage.AttributeIdentifierList = NULL;
+        reqMessage.ListCount = 0;
+    }
+
+    return EC_Normal;
+}
+
+OFCondition DcmSCP::sendNGETResponse(const T_ASC_PresentationContextID presID,
+                                     const Uint16 messageID,
+                                     const OFString& sopClassUID,
+                                     const OFString& sopInstanceUID,
+                                     const Uint16 rspStatusCode,
+                                     DcmDataset* attributeList)
+{
+    OFCondition cond;
+    OFString tempStr;
+
+    T_DIMSE_Message response;
+    memset((char*)&response, 0, sizeof(response));
+    T_DIMSE_N_GetRSP& getRsp              = response.msg.NGetRSP;
+    response.CommandField                 = DIMSE_N_GET_RSP;
+    getRsp.MessageIDBeingRespondedTo      = messageID;
+    getRsp.DimseStatus                    = rspStatusCode;
+    // Include optional fields AffectedSOPClassUID and AffectedSOPInstanceUID (PS3.7 Table 10.3-5)
+    getRsp.opts = O_NGET_AFFECTEDSOPCLASSUID | O_NGET_AFFECTEDSOPINSTANCEUID;
+    OFStandard::strlcpy(getRsp.AffectedSOPClassUID, sopClassUID.c_str(), sizeof(getRsp.AffectedSOPClassUID));
+    OFStandard::strlcpy(
+        getRsp.AffectedSOPInstanceUID, sopInstanceUID.c_str(), sizeof(getRsp.AffectedSOPInstanceUID));
+    // The Attribute List dataset is conditional (PS3.7 Section 10.3.5): include it when provided
+    getRsp.DataSetType = (attributeList != NULL) ? DIMSE_DATASET_PRESENT : DIMSE_DATASET_NULL;
+
+    if (DCM_dcmnetLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
+    {
+        DCMNET_INFO("Sending N-GET Response");
+        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, response, DIMSE_OUTGOING, NULL, presID));
+    }
+    else
+    {
+        DCMNET_INFO("Sending N-GET Response (" << DU_ngetStatusString(rspStatusCode) << ")");
+    }
+
+    cond = sendDIMSEMessage(presID, &response, attributeList);
+    if (cond.bad())
+    {
+        DCMNET_ERROR("Failed sending N-GET response: " << DimseCondition::dump(tempStr, cond));
     }
 
     return cond;
@@ -1503,12 +1597,12 @@ Uint16 DcmSCP::checkEVENTREPORTRequest(T_DIMSE_N_EventReportRQ& /*reqMessage*/, 
 /*                         General message handling                          */
 /* ************************************************************************* */
 
-void DcmSCP::notifySENDProgress(const unsigned long byteCount)
+void DcmSCP::notifySENDProgress(const Uint64 byteCount)
 {
     DCMNET_TRACE("Bytes sent: " << byteCount);
 }
 
-void DcmSCP::notifyRECEIVEProgress(const unsigned long byteCount)
+void DcmSCP::notifyRECEIVEProgress(const Uint64 byteCount)
 {
     DCMNET_TRACE("Bytes received: " << byteCount);
 }
@@ -1590,6 +1684,19 @@ OFCondition DcmSCP::receiveDIMSEDataset(T_ASC_PresentationContextID* presID, Dcm
     if (m_assoc == NULL)
         return DIMSE_ILLEGALASSOCIATION;
 
+    /* if a custom nesting depth limit is configured, pre-allocate
+     * the dataset and apply the setting before parsing starts.
+     * DIMSE_receiveDataSetInMemory() will use this dataset instead
+     * of creating a new one internally. */
+    OFBool weAllocated = OFFalse;
+    if (dataObject != NULL && *dataObject == NULL
+        && m_maxNestingDepth != 0)
+    {
+        *dataObject = new DcmDataset();
+        (*dataObject)->setMaxNestingDepth(m_maxNestingDepth);
+        weAllocated = OFTrue;
+    }
+
     OFCondition cond;
     /* call the corresponding DIMSE function to receive the dataset */
     if (m_cfg->getProgressNotificationMode())
@@ -1619,6 +1726,14 @@ OFCondition DcmSCP::receiveDIMSEDataset(T_ASC_PresentationContextID* presID, Dcm
     }
     else
     {
+        /* if we pre-allocated the dataset, clean up on error since
+         * DIMSE_receiveDataSetInMemory() won't delete a dataset
+         * that was passed in by the caller */
+        if (weAllocated && dataObject != NULL)
+        {
+            delete *dataObject;
+            *dataObject = NULL;
+        }
         OFString tempStr;
         DCMNET_ERROR("Unable to receive dataset on presentation context "
                      << OFstatic_cast(unsigned int, *presID) << ": " << DimseCondition::dump(tempStr, cond));
@@ -1687,8 +1802,8 @@ OFCondition DcmSCP::receiveSTORERequestDataset(T_ASC_PresentationContextID* pres
         DCMNET_ERROR("Unable to receive dataset on presentation context "
                      << OFstatic_cast(unsigned int, *presID) << ": " << DimseCondition::dump(tempStr, cond));
         // Could not create the filestream, so ignore the dataset
-        DIC_UL bytesRead = 0;
-        DIC_UL pdvCount  = 0;
+        Uint64 bytesRead = 0;
+        Uint64 pdvCount  = 0;
         DCMNET_DEBUG("Ignoring incoming dataset and returning an error status to the SCU");
         cond = DIMSE_ignoreDataSet(
             m_assoc, m_cfg->getDIMSEBlockingMode(), m_cfg->getDIMSETimeout(), &bytesRead, &pdvCount);
@@ -1910,6 +2025,13 @@ void DcmSCP::setAlwaysAcceptDefaultRole(const OFBool enabled)
 
 // ----------------------------------------------------------------------------
 
+void DcmSCP::setMaxNestingDepth(const Sint32 maxDepth)
+{
+    m_maxNestingDepth = maxDepth;
+}
+
+// ----------------------------------------------------------------------------
+
 /* Get methods for SCP settings and current association information */
 
 OFBool DcmSCP::getRefuseAssociation() const
@@ -1999,6 +2121,13 @@ OFBool DcmSCP::getHostLookupEnabled() const
 OFBool DcmSCP::getProgressNotificationMode() const
 {
     return m_cfg->getProgressNotificationMode();
+}
+
+// ----------------------------------------------------------------------------
+
+Sint32 DcmSCP::getMaxNestingDepth() const
+{
+    return m_maxNestingDepth;
 }
 
 // ----------------------------------------------------------------------------
@@ -2167,13 +2296,13 @@ OFBool DcmSCP::stopAfterConnectionTimeout()
 /*                            Callback functions                             */
 /* ************************************************************************* */
 
-void DcmSCP::callbackSENDProgress(void* callbackContext, const unsigned long byteCount)
+void DcmSCP::callbackSENDProgress(void* callbackContext, Uint64 byteCount)
 {
     if (callbackContext != NULL)
         OFreinterpret_cast(DcmSCP*, callbackContext)->notifySENDProgress(byteCount);
 }
 
-void DcmSCP::callbackRECEIVEProgress(void* callbackContext, const unsigned long byteCount)
+void DcmSCP::callbackRECEIVEProgress(void* callbackContext, Uint64 byteCount)
 {
     if (callbackContext != NULL)
         OFreinterpret_cast(DcmSCP*, callbackContext)->notifyRECEIVEProgress(byteCount);

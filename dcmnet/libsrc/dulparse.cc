@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2024, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were partly developed by
@@ -238,7 +238,12 @@ parseAssociate(unsigned char *buf, unsigned long pduLength,
                 cond = parsePresentationContext(type, context, buf, &itemLength, pduLength);
                 if (cond.bad())
                 {
-                    free(context);
+                    /* Deep-free: parsePresentationContext() may have created
+                     * context->transferSyntaxList and enqueued transfer syntax
+                     * sub-items before failing; a plain free(context) would
+                     * leak both (remotely triggerable memory-exhaustion DoS).
+                     */
+                    destroyPresentationContext(&context);
                 }
                 else
                 {
@@ -292,6 +297,15 @@ parseAssociate(unsigned char *buf, unsigned long pduLength,
     if (cond.bad())
     {
       destroyAssociatePDUPresentationContextList(&assoc->presentationContextList);
+      /* On a parse error the parsed extended negotiation sub-items are only
+       * held by assoc->userInfo.extNegList; no service parameter list has
+       * adopted them yet. destroyUserInformationLists() releases the list
+       * container but not its members (see the ownership note there), so
+       * the SOPClassExtendedNegotiationSubItem objects must be released
+       * explicitly here.
+       */
+      if (assoc->userInfo.extNegList != NULL)
+        deleteListMembers(*assoc->userInfo.extNegList);
       destroyUserInformationLists(&assoc->userInfo);
     }
     return cond;
@@ -590,7 +604,17 @@ parseUserInfo(DUL_USERINFO * userInfo,
             extNeg = new SOPClassExtendedNegotiationSubItem;
             if (extNeg == NULL)  return EC_MemoryExhausted;
             cond = parseExtNeg(extNeg, buf, &length, userLength);
-            if (cond.bad()) return cond;
+            if (cond.bad())
+            {
+                /* extNeg has not yet been pushed to extNegList, so the
+                 * outer cleanup in parseAssociate would not see it. Release
+                 * it here. parseExtNeg only returns errors before allocating
+                 * extNeg->serviceClassAppInfo, so there is no inner buffer
+                 * to free.
+                 */
+                delete extNeg;
+                return cond;
+            }
             if (userInfo->extNegList == NULL)
             {
                 userInfo->extNegList = new SOPClassExtendedNegotiationSubItemList;
@@ -614,6 +638,19 @@ parseUserInfo(DUL_USERINFO * userInfo,
           {
             delete usrIdent;
             return cond;
+          }
+          // DICOM permits at most one User Identity Negotiation sub-item per
+          // association. Reject a duplicate instead of silently overwriting
+          // userInfo->usrIdent, which would leak the previously
+          // parsed sub-item: the cleanup in destroyUserInformationLists() can
+          // only free whichever pointer is stored last, so each earlier
+          // allocation would leak permanently. An unauthenticated peer could
+          // otherwise pack many sub-items into a single PDU to exhaust memory.
+          if (userInfo->usrIdent != NULL)
+          {
+            delete usrIdent;
+            return makeDcmnetCondition(DULC_ILLEGALPDU, OF_error,
+              "Multiple User Identity Negotiation sub-items in A-ASSOCIATE PDU");
           }
           userInfo->usrIdent = usrIdent;
           buf += length;

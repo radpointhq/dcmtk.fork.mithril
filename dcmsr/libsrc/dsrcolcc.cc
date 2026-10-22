@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2010-2024, OFFIS e.V.
+ *  Copyright (C) 2010-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -24,6 +24,7 @@
 #include "dcmtk/config/osconfig.h"    /* make sure OS specific configuration is included first */
 
 #include "dcmtk/dcmsr/dsrcolcc.h"
+#include "dcmtk/dcmsr/codes/dcm.h"
 
 
 DSRColonCadSRConstraintChecker::DSRColonCadSRConstraintChecker()
@@ -130,8 +131,14 @@ OFBool DSRColonCadSRConstraintChecker::checkContentRelationship(const E_ValueTyp
     /* row 9 of the table */
     else if ((relationshipType == RT_selectedFrom) && !byReference && (sourceValueType == VT_TCoord))
     {
-        result = (targetValueType == VT_SCoord) || (targetValueType == VT_SCoord3D) || (targetValueType == VT_Image) ||
-                 (targetValueType == VT_Waveform);
+        result = (targetValueType == VT_SCoord) || (targetValueType == VT_SCoord3D) || (targetValueType == VT_Image);
     }
     return result;
+}
+
+
+OFCondition DSRColonCadSRConstraintChecker::checkRootConceptName(const DSRCodedEntryValue &conceptName) const
+{
+    return conceptName.isNotEqual(CODE_DCM_ColonCADReport, "01" /*defaultCodingSchemeVersion*/) ?
+        SR_EC_InvalidRootConceptName : DSRIODConstraintChecker::checkRootConceptName(conceptName);
 }

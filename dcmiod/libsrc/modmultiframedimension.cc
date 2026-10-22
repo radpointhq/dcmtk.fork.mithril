@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -29,6 +29,23 @@
 #include "dcmtk/dcmdata/dcvrui.h"
 #include "dcmtk/dcmdata/dcdeftag.h"
 #include "dcmtk/dcmiod/iodutil.h" // for static helpers
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_dimModuleRules;
+    OFMutex                s_dimModuleMutex;
+    OFshared_ptr<IODRules> s_dimIndexRules;
+    OFMutex                s_dimIndexMutex;
+    OFshared_ptr<IODRules> s_dimOrgRules;
+    OFMutex                s_dimOrgMutex;
+}
 
 const OFString IODMultiframeDimensionModule::m_ModuleName = "MultiframeDimensionModule";
 
@@ -93,7 +110,10 @@ OFCondition IODMultiframeDimensionModule::addDimensionIndex(const DcmTagKey& dim
         }
         result = item->setDimensionOrganizationUID(dimensionOrganizationUID);
         if (result.bad())
+        {
+            delete item;
             return result;
+        }
         m_DimensionOrganizationSequence.push_back(item);
     }
 
@@ -117,6 +137,7 @@ OFCondition IODMultiframeDimensionModule::addDimensionIndex(const DcmTagKey& dim
     {
         DCMIOD_ERROR("Could not add Dimension Index: Invalid data values");
         delete dim;
+        return result;
     }
     m_DimensionIndexSequence.push_back(dim);
 
@@ -184,11 +205,32 @@ OFCondition IODMultiframeDimensionModule::write(DcmItem& destination)
 
 void IODMultiframeDimensionModule::resetRules()
 {
-    // Parameters for Rule are tag, VM, type (1,1C,2,2C,3), module name and logical IOD level
-    m_Rules->addRule(new IODRule(DCM_DimensionOrganizationSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DimensionOrganizationType, "1", "3", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DimensionIndexSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    s_dimModuleMutex.lock();
+    if (!s_dimModuleRules)
+    {
+        s_dimModuleRules.reset(new IODRules());
+        s_dimModuleRules->addRule(
+            new IODRule(DCM_DimensionOrganizationSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimModuleRules->addRule(
+            new IODRule(DCM_DimensionOrganizationType, "1", "3", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimModuleRules->addRule(
+            new IODRule(DCM_DimensionIndexSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_dimModuleMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_dimModuleRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_dimModuleRules->begin();
+        while (it != s_dimModuleRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition IODMultiframeDimensionModule::checkDimensions(DcmItem* fgItem)
@@ -471,16 +513,38 @@ IODMultiframeDimensionModule::DimensionIndexItem::~DimensionIndexItem()
 
 void IODMultiframeDimensionModule::DimensionIndexItem::resetRules()
 {
-    // Concatenation attributes
-    m_Rules->addRule(new IODRule(DCM_DimensionIndexPointer, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DimensionIndexPrivateCreator, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_FunctionalGroupPointer, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_FunctionalGroupPrivateCreator, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DimensionOrganizationUID, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DimensionDescriptionLabel, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
+    s_dimIndexMutex.lock();
+    if (!s_dimIndexRules)
+    {
+        s_dimIndexRules.reset(new IODRules());
+        s_dimIndexRules->addRule(
+            new IODRule(DCM_DimensionIndexPointer, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimIndexRules->addRule(
+            new IODRule(DCM_DimensionIndexPrivateCreator, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimIndexRules->addRule(
+            new IODRule(DCM_FunctionalGroupPointer, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimIndexRules->addRule(
+            new IODRule(DCM_FunctionalGroupPrivateCreator, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimIndexRules->addRule(
+            new IODRule(DCM_DimensionOrganizationUID, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_dimIndexRules->addRule(
+            new IODRule(DCM_DimensionDescriptionLabel, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_dimIndexMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_dimIndexRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_dimIndexRules->begin();
+        while (it != s_dimIndexRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFString IODMultiframeDimensionModule::DimensionIndexItem::getName() const
@@ -647,8 +711,28 @@ IODMultiframeDimensionModule::DimensionOrganizationItem::~DimensionOrganizationI
 
 void IODMultiframeDimensionModule::DimensionOrganizationItem::resetRules()
 {
-    // Concatenation attributes
-    m_Rules->addRule(new IODRule(DCM_DimensionOrganizationUID, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    s_dimOrgMutex.lock();
+    if (!s_dimOrgRules)
+    {
+        s_dimOrgRules.reset(new IODRules());
+        s_dimOrgRules->addRule(
+            new IODRule(DCM_DimensionOrganizationUID, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_dimOrgMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_dimOrgRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_dimOrgRules->begin();
+        while (it != s_dimOrgRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFString IODMultiframeDimensionModule::DimensionOrganizationItem::getName() const

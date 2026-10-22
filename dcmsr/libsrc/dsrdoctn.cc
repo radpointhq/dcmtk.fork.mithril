@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2025, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -209,8 +209,16 @@ OFCondition DSRDocumentTreeNode::write(DcmItem &dataset,
 OFCondition DSRDocumentTreeNode::readXML(const DSRXMLDocument &doc,
                                          DSRXMLCursor cursor,
                                          const E_DocumentType documentType,
-                                         const size_t flags)
+                                         const size_t flags,
+                                         const size_t depth)
 {
+    /* check whether maximum nesting level is exceeded */
+    if (depth > DCMSR_MAX_XML_NESTING_LEVEL)
+    {
+        DCMSR_WARN("Maximum nesting level (" << DCMSR_MAX_XML_NESTING_LEVEL << ") of XML elements exceeded");
+        return SR_EC_MaximumNestingLevelExceeded;
+    }
+
     OFCondition result = SR_EC_InvalidDocument;
     if (cursor.valid())
     {
@@ -300,7 +308,7 @@ OFCondition DSRDocumentTreeNode::readXML(const DSRXMLDocument &doc,
                             DCMSR_WARN("Content item has invalid/incomplete template identification");
                     }
                     /* proceed with reading child nodes */
-                    result = node->readXML(doc, cursor, documentType, flags);
+                    result = node->readXML(doc, cursor, documentType, flags, depth + 1 /* increase the nesting level by 1 */);
                     /* print node error message (if any) */
                     doc.printGeneralNodeError(cursor, result);
                 } else {
@@ -381,7 +389,7 @@ OFCondition DSRDocumentTreeNode::writeXML(STD_NAMESPACE ostream &stream,
         if (!ObservationDateTime.empty())
         {
             /* output time in ISO 8601 format */
-            DcmDateTime::getISOFormattedDateTimeFromString(ObservationDateTime, tmpString, OFTrue /*seconds*/, OFFalse /*fraction*/,
+            DcmDateTime::getISOFormattedDateTimeFromString(ObservationDateTime, tmpString, OFTrue /*seconds*/, OFTrue /*fraction*/,
                 OFTrue /*timeZone*/, OFFalse /*createMissingPart*/, "T" /*dateTimeSeparator*/, "" /*timeZoneSeparator*/);
             writeStringValueToXML(stream, tmpString, "datetime");
         }
@@ -696,7 +704,7 @@ OFCondition DSRDocumentTreeNode::readSRDocumentContentModule(DcmItem &dataset,
     result = readDocumentRelationshipMacro(dataset, constraintChecker, "1" /*posString*/, flags);
     /* read Document Content Macro */
     if (result.good())
-        result = readDocumentContentMacro(dataset, "1" /*posString*/, flags);
+        result = readDocumentContentMacro(dataset, constraintChecker, "1" /*posString*/, flags);
     return result;
 }
 
@@ -843,7 +851,7 @@ OFCondition DSRDocumentTreeNode::writeDocumentRelationshipMacro(DcmItem &dataset
             }
         }
     }
-    /* write ContentSequence */
+    /* write Content Sequence */
     if (result.good())
         result = writeContentSequence(dataset, markedItems);
     return result;
@@ -851,6 +859,7 @@ OFCondition DSRDocumentTreeNode::writeDocumentRelationshipMacro(DcmItem &dataset
 
 
 OFCondition DSRDocumentTreeNode::readDocumentContentMacro(DcmItem &dataset,
+                                                          const DSRIODConstraintChecker *constraintChecker,
                                                           const OFString &posString,
                                                           const size_t flags)
 {
@@ -862,6 +871,33 @@ OFCondition DSRDocumentTreeNode::readDocumentContentMacro(DcmItem &dataset,
     {
         /* the concept name is required for the root container */
         result = ConceptName.readSequence(dataset, DCM_ConceptNameCodeSequence, "1" /*type*/, flags);
+        if (result.good())
+        {
+            /* check whether the root concept name (i.e. the document title) is valid/supported */
+            if (constraintChecker != NULL)
+            {
+                if (DCM_dcmsrLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
+                {
+                    OFString templateIdentifier;
+                    OFString mappingResource;
+                    if (constraintChecker->getRootTemplateIdentification(templateIdentifier, mappingResource).good())
+                        DCMSR_DEBUG("Checking root concept name for TID " << templateIdentifier << " (" << mappingResource << ")");
+                    else
+                        DCMSR_DEBUG("Checking root concept name for " << documentTypeToReadableName(constraintChecker->getDocumentType()));
+                }
+                /* perform the actual check */
+                result = constraintChecker->checkRootConceptName(ConceptName);
+                if (result == SR_EC_UnsupportedRootConceptName)
+                {
+                    DCMSR_WARN("Found unsupported root concept name " << ConceptName);
+                    /* just warn, ignore the unsupported value */
+                    result = EC_Normal;
+                }
+                else if (result == SR_EC_InvalidRootConceptName)
+                    DCMSR_WARN("Found invalid root concept name " << ConceptName);
+            }
+        } else
+            result = SR_EC_InvalidRootConceptName;
     } else {
         /* the concept name might be empty for all other content items */
         ConceptName.readSequence(dataset, DCM_ConceptNameCodeSequence, "1C" /*type*/, flags);
@@ -1039,7 +1075,7 @@ OFCondition DSRDocumentTreeNode::readContentSequence(DcmItem &dataset,
                                 result = node->readDocumentRelationshipMacro(*ditem, constraintChecker, location, flags);
                                 /* read Document Content Macro */
                                 if (result.good())
-                                    result = node->readDocumentContentMacro(*ditem, location.c_str(), flags);
+                                    result = node->readDocumentContentMacro(*ditem, constraintChecker, location, flags);
                             } else {
                                 /* create new node failed */
 

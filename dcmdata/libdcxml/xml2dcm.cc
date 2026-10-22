@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2003-2025, OFFIS e.V.
+ *  Copyright (C) 2003-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -13,7 +13,7 @@
  *
  *  Module:  dcmdata
  *
- *  Author:  Joerg Riesmeier
+ *  Author:  Joerg Riesmeier, Marco Eichelberg
  *
  *  Purpose: Helper class for converting an XML document to DICOM file or data set
  *
@@ -41,8 +41,11 @@
 // Suppress warnings caused by these pragmas when compiling with GCC.
 #include DCMTK_DIAGNOSTIC_PUSH
 #include DCMTK_DIAGNOSTIC_IGNORE_CLANG_PRAGMAS_ON_GCC
+// GCC on MacOS 26 prints warnings about deprecated declarations.
+#include DCMTK_DIAGNOSTIC_IGNORE_DEPRECATED_DECLARATIONS
 #include <libxml/parser.h>
 #include DCMTK_DIAGNOSTIC_POP
+
 
 // This function is also used in dcmsr, try to stay in sync!
 extern "C" void xml2dcm_errorFunction(void * ctx, const char *msg, ...)
@@ -88,13 +91,14 @@ extern "C" void xml2dcm_errorFunction(void * ctx, const char *msg, ...)
 
 static OFBool xmlIsBlankNodeOrComment(xmlNode *node)
 {
-  if (xmlIsBlankNode(node)) return OFTrue;
-  return (0 == xmlStrcmp(node->name, OFreinterpret_cast(const xmlChar *, "comment")));
+    if (xmlIsBlankNode(node))
+        return OFTrue;
+    return (xmlStrcmp(node->name, OFreinterpret_cast(const xmlChar *, "comment")) == 0);
 }
 
 
 DcmXMLParseHelper::DcmXMLParseHelper()
-: EncodingHandler(NULL)
+  : EncodingHandler(NULL)
 {
 }
 
@@ -205,7 +209,7 @@ OFCondition DcmXMLParseHelper::createNewElement(
         /* make sure that "tag" attribute exists */
         if (elemTag == NULL)
         {
-            DCMDATA_WARN("missing 'tag' attribute for node '" << current->name << "'");
+            DCMDATA_WARN("DcmXMLParseHelper: missing 'tag' attribute for node '" << current->name << "'");
             result = EC_XMLParseError;
         }
         /* determine group and element number from "tag" */
@@ -220,10 +224,10 @@ OFCondition DcmXMLParseHelper::createNewElement(
                 /* check whether "vr" attribute exists */
                 if (elemVR == NULL)
                 {
-                    DCMDATA_WARN("missing 'vr' attribute for " << dcmTag
+                    DCMDATA_WARN("DcmXMLParseHelper: missing 'vr' attribute for " << dcmTag
                         << ", using the tag's VR (" << dcmTag.getVR().getVRName() << ")");
                 } else {
-                    DCMDATA_WARN("invalid 'vr' attribute (" << elemVR << ") for " << dcmTag
+                    DCMDATA_WARN("DcmXMLParseHelper: invalid 'vr' attribute (" << elemVR << ") for " << dcmTag
                         << ", using the tag's VR (" << dcmTag.getVR().getVRName() << ")");
                 }
             } else {
@@ -235,7 +239,7 @@ OFCondition DcmXMLParseHelper::createNewElement(
                     ((tagEVR != EVR_xs) || ((dcmEVR != EVR_US) && (dcmEVR != EVR_SS))) &&
                     (((tagEVR != EVR_ox) && (tagEVR != EVR_px)) || ((dcmEVR != EVR_OB) && (dcmEVR != EVR_OW))))
                 {
-                    DCMDATA_WARN("element " << dcmTag << " has wrong VR (" << dcmVR.getVRName()
+                    DCMDATA_WARN("DcmXMLParseHelper: element " << dcmTag << " has wrong VR (" << dcmVR.getVRName()
                         << "), correct is '" << dcmTag.getVR().getVRName() << "'");
                 }
                 dcmTag.setVR(dcmVR);
@@ -243,7 +247,7 @@ OFCondition DcmXMLParseHelper::createNewElement(
             /* create DICOM element */
             result = DcmItem::newDicomElementWithVR(newElem, dcmTag);
         } else {
-            DCMDATA_WARN("invalid 'tag' attribute (" << elemTag << ") for node '" << current->name << "'");
+            DCMDATA_WARN("DcmXMLParseHelper: invalid 'tag' attribute (" << elemTag << ") for node '" << current->name << "'");
             result = EC_XMLParseError;
         }
         if (result.bad())
@@ -275,12 +279,12 @@ OFCondition DcmXMLParseHelper::putElementContent(
         /* check whether node content is present */
         if (xmlStrcmp(attrVal, OFreinterpret_cast(const xmlChar *, "hidden")) == 0)
         {
-            DCMDATA_WARN("content of node " << element->getTag() << " is 'hidden', empty element inserted");
+            DCMDATA_WARN("DcmXMLParseHelper: content of node " << element->getTag() << " is 'hidden', empty element inserted");
             /* return an error unless the element is part of the file meta information */
             if (element->getGTag() != 0x0002)
                 result = EC_MissingValue;
         }
-        /* check whether node content is base64 encoded */
+        /* check whether node content is Base64 encoded */
         else if (xmlStrcmp(attrVal, OFreinterpret_cast(const xmlChar *, "base64")) == 0)
         {
             Uint8 *data = NULL;
@@ -295,6 +299,11 @@ OFCondition DcmXMLParseHelper::putElementContent(
                 result = element->putUint8Array(data, OFstatic_cast(Uint32, length));
                 /* delete buffer since data is copied into the element */
                 delete[] data;
+            }
+            else if (xmlStrlen(elemVal) > 0)
+            {
+                DCMDATA_WARN("DcmXMLParseHelper: cannot decode Base64 data of node " << element->getTag());
+                result = EC_CorruptedData;
             }
         }
         /* check whether node content is stored in a file */
@@ -314,8 +323,21 @@ OFCondition DcmXMLParseHelper::putElementContent(
                     if (buflen & 1)
                         buflen++;
                     Uint8 *buf = NULL;
+                    /* reject files that are too large to be stored in a DICOM element:
+                     * the buffer length is narrowed to a 32-bit value for the allocation
+                     * below, whereas the full (size_t) file size is used as the fread()
+                     * length. For files larger than the 32-bit DICOM value length limit
+                     * this would allocate a truncated buffer and then overflow it while
+                     * reading.
+                     */
+                    if (buflen > 0xfffffffeUL)
+                    {
+                        DCMDATA_WARN("DcmXMLParseHelper: binary data file too large ("
+                            << fileSize << " bytes) for element " << element->getTag() << ": " << filename);
+                        result = EC_MaximumLengthViolated;
+                    }
                     /* create buffer of OB or OW data */
-                    if (dcmEVR == EVR_OW)
+                    else if (dcmEVR == EVR_OW)
                     {
                         Uint16 *buf16 = NULL;
                         result = element->createUint16Array(OFstatic_cast(Uint32, buflen / 2), buf16);
@@ -329,7 +351,8 @@ OFCondition DcmXMLParseHelper::putElementContent(
                         /* read binary file into the buffer */
                         if (fread(buf, 1, OFstatic_cast(size_t, fileSize), f) != fileSize)
                         {
-                            DCMDATA_WARN("cannot read binary data file: " << filename << ": " << OFStandard::getLastSystemErrorCode().message());
+                            DCMDATA_WARN("DcmXMLParseHelper: cannot read binary data file: " << filename << ": "
+                                << OFStandard::getLastSystemErrorCode().message());
                             result = EC_CorruptedData;
                         }
                         else if (dcmEVR == EVR_OW)
@@ -340,11 +363,11 @@ OFCondition DcmXMLParseHelper::putElementContent(
                     }
                     fclose(f);
                 } else {
-                    DCMDATA_WARN("cannot open binary data file: " << filename);
+                    DCMDATA_WARN("DcmXMLParseHelper: cannot open binary data file: " << filename);
                     result = EC_InvalidTag;
                 }
             } else
-                DCMDATA_WARN("filename for element " << element->getTag() << " is missing, empty element inserted");
+                DCMDATA_WARN("DcmXMLParseHelper: filename for element " << element->getTag() << " is missing, empty element inserted");
         } else {
             OFString dicomVal;
             /* convert character set from UTF-8 (for specific VRs only) */
@@ -357,7 +380,7 @@ OFCondition DcmXMLParseHelper::putElementContent(
                 result = element->putString(OFreinterpret_cast(char *, elemVal));
             }
             if (result.bad())
-                DCMDATA_WARN("cannot put content to element " << element->getTag() << ": " << result.text());
+                DCMDATA_WARN("DcmXMLParseHelper: cannot put content to element " << element->getTag() << ": " << result.text());
         }
         /* free allocated memory */
         xmlFree(elemVal);
@@ -409,7 +432,7 @@ OFCondition DcmXMLParseHelper::parseElement(
             else if (xmlStrcmp(elemVal, OFreinterpret_cast(const xmlChar *, "ISO_IR 203")) == 0)
                 encString = "ISO-8859-15";
             else if (xmlStrlen(elemVal) > 0)
-                DCMDATA_WARN("character set '" << elemVal << "' not supported");
+                DCMDATA_WARN("DcmXMLParseHelper: character set '" << elemVal << "' not supported");
             if (encString != NULL)
             {
                 /* find appropriate encoding handler */
@@ -433,10 +456,17 @@ OFCondition DcmXMLParseHelper::parseElement(
 
 OFCondition DcmXMLParseHelper::parseSequence(
     DcmSequenceOfItems *sequence,
+    size_t depth,
     xmlNodePtr current,
     E_TransferSyntax xfer,
     const OFBool stopOnError)
 {
+    if (depth > DCMXML_MAX_SEQUENCE_NESTING)
+    {
+        DCMDATA_ERROR("DcmXMLParseHelper: maximum sequence nesting level " << DCMXML_MAX_SEQUENCE_NESTING << " exceeded");
+        return EC_NestingDepthLimitExceeded;
+    }
+
     OFCondition result = EC_Normal;
     if (sequence != NULL)
     {
@@ -454,21 +484,25 @@ OFCondition DcmXMLParseHelper::parseSequence(
                 {
                     sequence->insert(newItem);
                     /* proceed parsing the item content */
-                    result = parseDataSet(newItem, current->xmlChildrenNode, xfer, stopOnError);
-                    if (result.bad())
-                        DCMDATA_WARN("cannot parse invalid item: " << result.text());
+                    result = parseDataSet(newItem, depth + 1, current->xmlChildrenNode, xfer, stopOnError);
+                    /* don't print warning about nexting depth limit because the warning would then
+                     * be repeated on each recursion level. We print that message elsewhere, and only once.
+                     * Other errors, however, should be reported here.
+                     */
+                    if (result.bad() && (result != EC_NestingDepthLimitExceeded))
+                        DCMDATA_WARN("DcmXMLParseHelper: cannot parse invalid item: " << result.text() << ", stop = " << stopOnError);
                 }
             } else if (!xmlIsBlankNodeOrComment(current))
-                DCMDATA_WARN("unexpected node '" << current->name << "', 'item' expected, skipping");
+                DCMDATA_WARN("DcmXMLParseHelper: unexpected node '" << current->name << "', 'item' expected, skipping");
+
             /* check for errors */
             if (result.bad())
             {
                 if  (stopOnError)
                 {
-                    /* exit the loop and return with an error */
-                    break;
+                    return result;
                 } else {
-                    DCMDATA_DEBUG("ignoring error as requested by the user");
+                    DCMDATA_DEBUG("DcmXMLParseHelper::parseSequence() ignoring error as requested by the user");
                     /* ignore the error */
                     result = EC_Normal;
                 }
@@ -506,10 +540,10 @@ OFCondition DcmXMLParseHelper::parsePixelSequence(
                     /* put pixel data into the item */
                     result = putElementContent(current, newItem);
                     if (result.bad())
-                        DCMDATA_WARN("cannot parse invalid pixel-item: " << result.text());
+                        DCMDATA_WARN("DcmXMLParseHelper: cannot parse invalid pixel-item: " << result.text());
                 }
             } else if (!xmlIsBlankNodeOrComment(current))
-                DCMDATA_WARN("unexpected node '" << current->name << "', 'pixel-item' expected, skipping");
+                DCMDATA_WARN("DcmXMLParseHelper: unexpected node '" << current->name << "', 'pixel-item' expected, skipping");
             /* check for errors */
             if (result.bad())
             {
@@ -518,7 +552,7 @@ OFCondition DcmXMLParseHelper::parsePixelSequence(
                     /* exit the loop and return with an error */
                     break;
                 } else {
-                    DCMDATA_DEBUG("ignoring error as requested by the user");
+                    DCMDATA_DEBUG("DcmXMLParseHelper::parsePixelSequence() ignoring error as requested by the user");
                     /* ignore the error */
                     result = EC_Normal;
                 }
@@ -550,7 +584,7 @@ OFCondition DcmXMLParseHelper::parseMetaHeader(
             if (xmlStrcmp(current->name, OFreinterpret_cast(const xmlChar *, "element")) == 0)
                 result = parseElement(metainfo, current);
             else if (!xmlIsBlankNodeOrComment(current))
-                DCMDATA_WARN("unexpected node '" << current->name << "', 'element' expected, skipping");
+                DCMDATA_WARN("DcmXMLParseHelper: unexpected node '" << current->name << "', 'element' expected, skipping");
             /* check for errors */
             if (result.bad())
             {
@@ -559,7 +593,7 @@ OFCondition DcmXMLParseHelper::parseMetaHeader(
                     /* exit the loop and return with an error */
                     break;
                 } else {
-                    DCMDATA_DEBUG("ignoring error as requested by the user");
+                    DCMDATA_DEBUG("DcmXMLParseHelper::parseMetaHeader() ignoring error as requested by the user");
                     /* ignore the error */
                     result = EC_Normal;
                 }
@@ -574,10 +608,17 @@ OFCondition DcmXMLParseHelper::parseMetaHeader(
 
 OFCondition DcmXMLParseHelper::parseDataSet(
     DcmItem *dataset,
+    size_t depth,
     xmlNodePtr current,
     E_TransferSyntax xfer,
     const OFBool stopOnError)
 {
+    if (depth > DCMXML_MAX_SEQUENCE_NESTING)
+    {
+        DCMDATA_ERROR("DcmXMLParseHelper: maximum sequence nesting level " << DCMXML_MAX_SEQUENCE_NESTING << " exceeded");
+        return EC_NestingDepthLimitExceeded;
+    }
+
     OFCondition result = EC_Normal;
     /* ignore blank (empty or whitespace only) nodes */
     while ((current != NULL) && xmlIsBlankNodeOrComment(current))
@@ -610,14 +651,14 @@ OFCondition DcmXMLParseHelper::parseDataSet(
                                 OFstatic_cast(DcmPixelData *, newElem)->putOriginalRepresentation(xfer, NULL, sequence);
                                 result = parsePixelSequence(sequence, current->xmlChildrenNode, stopOnError);
                             } else
-                                DCMDATA_WARN("wrong VR for 'sequence' element with pixel data, ignoring child nodes");
+                                DCMDATA_WARN("DcmXMLParseHelper: wrong VR for 'sequence' element with pixel data, ignoring child nodes");
                         }
                     } else {
                         /* proceed parsing the items of the sequence */
                         if (newElem->ident() == EVR_SQ)
-                            result = parseSequence(OFstatic_cast(DcmSequenceOfItems *, newElem), current->xmlChildrenNode, xfer, stopOnError);
+                            result = parseSequence(OFstatic_cast(DcmSequenceOfItems *, newElem), depth + 1, current->xmlChildrenNode, xfer, stopOnError);
                         else
-                            DCMDATA_WARN("wrong VR for 'sequence' element, ignoring child nodes");
+                            DCMDATA_WARN("DcmXMLParseHelper: wrong VR for 'sequence' element, ignoring child nodes");
                     }
                 } else {
                     /* delete element if insertion failed */
@@ -625,7 +666,7 @@ OFCondition DcmXMLParseHelper::parseDataSet(
                 }
             }
         } else if (!xmlIsBlankNodeOrComment(current))
-            DCMDATA_WARN("unexpected node '" << current->name << "', skipping");
+            DCMDATA_WARN("DcmXMLParseHelper: unexpected node '" << current->name << "', skipping");
         /* check for errors */
         if (result.bad())
         {
@@ -634,7 +675,7 @@ OFCondition DcmXMLParseHelper::parseDataSet(
                 /* exit the loop and return with an error */
                 break;
             } else {
-                DCMDATA_DEBUG("ignoring error as requested by the user");
+                DCMDATA_DEBUG("DcmXMLParseHelper::parseDataSet() ignoring error as requested by the user");
                 /* ignore the error */
                 result = EC_Normal;
             }
@@ -750,7 +791,7 @@ OFCondition DcmXMLParseHelper::readXmlFile(
                             xmlChar *xferUID = xmlGetProp(current, OFreinterpret_cast(const xmlChar *, "xfer"));
                             if (xferUID != NULL)
                                 xfer = DcmXfer(OFreinterpret_cast(char *, xferUID)).getXfer();
-                            result = parseDataSet(fileformat.getDataset(), current->xmlChildrenNode, xfer, stopOnError);
+                            result = parseDataSet(fileformat.getDataset(), 0, current->xmlChildrenNode, xfer, stopOnError);
                             /* free allocated memory */
                             xmlFree(xferUID);
                             if (result.bad())

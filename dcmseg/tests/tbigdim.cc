@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2022-2025, OFFIS e.V.
+ *  Copyright (C) 2022-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -20,11 +20,8 @@
  */
 
 #include "dcmtk/config/osconfig.h" /* make sure OS specific configuration is included first */
+#include "dcmtk/dcmseg/segtypes.h"
 #include "dcmtk/ofstd/oftest.h"
-#include "dcmtk/dcmseg/segtypes.h" /* for DCMSEG_DEBUG */
-
-// DCMTK's original OFMap implementation is too slow for this test...
-#ifdef HAVE_STL_MAP
 #include "dcmtk/dcmseg/segdoc.h"
 #include "dcmtk/dcmseg/segment.h"
 
@@ -302,12 +299,3 @@ static void checkCreatedObject(DcmDataset& dset)
         }
     }
 }
-#else
-
-// Dummy version of the test case. Needed to prevent ctest test failure.
-OFTEST(dcmseg_bigdim)
-{
-    DCMSEG_DEBUG("Will not run dcmseg_bigdim test: std::map support (HAVE_STL_MAP) must be defined to complete the test in acceptable time");
-}
-
-#endif // HAVE_STL_MAP

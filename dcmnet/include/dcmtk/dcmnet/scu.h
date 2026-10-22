@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2008-2025, OFFIS e.V.
+ *  Copyright (C) 2008-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -30,12 +30,14 @@
 #include "dcmtk/dcmnet/dcompat.h"
 #include "dcmtk/dcmnet/dimse.h"    /* DIMSE network layer */
 #include "dcmtk/ofstd/oflist.h"
+#include "dcmtk/ofstd/oftypes.h"
 
 // include this file in doxygen documentation
 
 /** @file scu.h
  *  @brief general Service Class User (SCU) class
  */
+
 
 /** Different types of closing an association
  */
@@ -189,11 +191,119 @@ private:
  *  support for negotiating associations and sending and receiving arbitrary DIMSE messages
  *  on that connection. DcmSCU has built-in C-ECHO support so derived classes do not have to
  *  implement that capability on their own.
+ *
+ *  The class supports both secure (TLS) and unsecure connections.
+ *
+ *  Logging:
+ *
+ *  Most log messages are sent to the "dcmtk.dcmnet" logger. The log level of that logger
+ *  can be used to globally control the verbosity of DcmSCU and derived classes.
+ *  There are some specific loggers defined and used by DcmSCU which can be enabled or disabled
+ *  individually via the DcmSCU::Logger member on DcmSCU instance level:
+ *  - "dcmtk.dcmnet.scu.cfindrq.dataset": Logs C-FIND request datasets to DEBUG level
+ *     (default level: enabled, i.e. logged by default)
+ *  - "dcmtk.dcmnet.scu.cfindrsp.dataset": Logs C-FIND response datasets to DEBUG level
+ *     (default level: OFF, i.e. not logged by default)
+ *  - "dcmtk.dcmnet.scu.cstorerq.dataset": Logs C-STORE request datasets to DEBUG level
+ *     (default level: OFF, i.e. not logged by default)
+ *  - "dcmtk.dcmnet.scu.ngetrq.identifierlist": Logs N-GET request attribute identifier lists to DEBUG level
+ *     (default level: enabled, i.e. logged by default)
+ *  - "dcmtk.dcmnet.scu.ngetrsp.dataset": Logs N-GET response attribute list datasets to DEBUG level
+ *     (default level: OFF, i.e. not logged by default)
+ *  - "dcmtk.dcmnet.scu.nactionrq.actioninformation": Logs N-ACTION request Action Information to DEBUG level
+ *     (default level: enabled, i.e. logged by default)
+ *  - "dcmtk.dcmnet.scu.nactionrsp.actionreply": Logs N-ACTION response Action Reply to DEBUG level
+ *     (default level: OFF, i.e. not logged by default)
+ *
+ *  These loggers can be enabled or disabled individually via the DcmSCU::Logger member,
+ *  e.g. `scu.Logger.setEnabled(DcmSCU::TLogger::LOGGER_C_STORE_RQ_DATASET, OFTrue);`
+ *  if scu is an instance of DcmSCU and C-STORE request datasets should be logged.
  */
 class DCMTK_DCMNET_EXPORT DcmSCU
 {
 
 public:
+
+    /** Struct encapsulating different extra loggers utilized by DcmSCU.
+     *  Each logger can be enabled or disabled individually. All loggers can
+     *  also be enabled or disabled at once via the special enum value
+     *  LOGGER_NUM_LOGGERS.
+     */
+    struct DCMTK_DCMNET_EXPORT TLogger
+    {
+        public:
+
+            /// Enumerate extra loggers utilized by DcmSCU.
+            enum E_LOGGER
+            {
+                /// Logger for C-FIND-RQ dataset, enabled per default
+                LOGGER_C_FIND_RQ_DATASET = 0,
+                /// Logger for C-FIND-RSP dataset, disabled per default
+                LOGGER_C_FIND_RSP_DATASET = 1,
+                /// Logger for C-STORE-RQ dataset, disabled per default
+                LOGGER_C_STORE_RQ_DATASET = 2,
+                /// Logger for N-GET-RQ attribute identifier list, enabled per default
+                LOGGER_N_GET_RQ_IDENTIFIER_LIST = 3,
+                /// Logger for N-GET-RSP attribute list dataset, disabled per default
+                LOGGER_N_GET_RSP_DATASET = 4,
+                /// Logger for N-ACTION-RQ Action Information, enabled per default
+                LOGGER_N_ACTION_RQ_ACTION_INFORMATION = 5,
+                /// Logger for N-ACTION-RSP Action Reply, disabled per default
+                LOGGER_N_ACTION_RSP_ACTION_REPLY = 6,
+                /// Number of loggers; provides number of loggers and can be
+                /// used a a placeholder to enable/disable all loggers at once
+                LOGGER_NUM_LOGGERS = 7
+            };
+
+            /// Default constructor, initializes logger names and sets defaults
+            /// for enabled states.
+            TLogger();
+
+            /** [] operator to access logger names by enum value.
+             *  @param logger The logger enum value
+             *  @return The name of the logger as OFString
+             */
+            const OFString& operator[](const E_LOGGER logger) const;
+
+            /** Check if the given logger is enabled.
+             *  If LOGGER_NUM_LOGGERS is given, the function checks if all loggers are enabled
+             *  and returns OFTrue in this case. If at least one logger is disabled,
+             *  OFFalse is returned.
+             *  @param logger The logger enum value
+             *  @return OFTrue if enabled, OFFalse otherwise
+             */
+            OFBool isEnabled(const E_LOGGER logger) const;
+
+            /** Enable or disable a logger.
+             *  If LOGGER_NUM_LOGGERS is given, the function enables or disables all loggers
+             *  at once.
+             *  @param logger The logger enum value
+             *  @param enabled OFTrue to enable, OFFalse to disable
+             */
+            void setEnabled(const E_LOGGER logger, const OFBool enabled);
+
+        protected:
+
+            /// Holds extra logger names utilized by DcmSCU.
+            /// Static since the logger names used are identical for all instances of DcmSCU.
+            static OFString m_loggerName[LOGGER_NUM_LOGGERS];
+
+            /// Enabled states of the loggers, specific for each DcmSCU instance.
+            OFBool m_loggerEnabled[LOGGER_NUM_LOGGERS];
+    };
+
+    /// Member holding information to extra loggers utilized by DcmSCU.
+    /// | Logger Enum                           | Logger Name                               | Description                                               | Default State |
+    /// |---------------------------------------|-------------------------------------------|-----------------------------------------------------------|---------------|
+    /// | LOGGER_C_FIND_RQ_DATASET              | dcmtk.dcmnet.scu.cfindrq.dataset          | Logs C-FIND request datasets to DEBUG level               | Enabled       |
+    /// | LOGGER_C_FIND_RSP_DATASET             | dcmtk.dcmnet.scu.cfindrsp.dataset         | Logs C-FIND response datasets to DEBUG level              | Disabled      |
+    /// | LOGGER_C_STORE_RQ_DATASET             | dcmtk.dcmnet.scu.cstorerq.dataset         | Logs C-STORE request datasets to DEBUG level              | Disabled      |
+    /// | LOGGER_N_GET_RQ_IDENTIFIER_LIST       | dcmtk.dcmnet.scu.ngetrq.identifierlist    | Logs N-GET request attribute identifier lists to DEBUG level | Enabled    |
+    /// | LOGGER_N_GET_RSP_DATASET              | dcmtk.dcmnet.scu.ngetrsp.dataset          | Logs N-GET response attribute list datasets to DEBUG level | Disabled     |
+    /// | LOGGER_N_ACTION_RQ_ACTION_INFORMATION | dcmtk.dcmnet.scu.nactionrq.actioninformation | Logs N-ACTION request Action Information to DEBUG level | Enabled    |
+    /// | LOGGER_N_ACTION_RSP_ACTION_REPLY      | dcmtk.dcmnet.scu.nactionrsp.actionreply      | Logs N-ACTION response Action Reply to DEBUG level      | Disabled   |
+    TLogger Logger;
+
     /** Constructor, just initializes internal class members
      */
     DcmSCU();
@@ -519,6 +629,11 @@ public:
      *  @param reqDataset     [in]  The dataset to be sent
      *  @param rspStatusCode  [out] The response status code received. 0 means success,
      *                              others can be found in the DICOM standard.
+     *  @param reqSOPClassUID [in]  Optional Requested SOP Class UID (0000,0003) to send
+     *                              instead of the presentation context's abstract syntax.
+     *                              Needed e.g. for UPS, where N-ACTION over the Pull/Watch
+     *                              SOP Class must still name the UPS Push SOP Class
+     *                              Empty = use abstract syntax.
      *  @return EC_Normal if request could be issued and response was received successfully,
      *          an error code otherwise
      */
@@ -526,7 +641,8 @@ public:
                                           const OFString& sopInstanceUID,
                                           const Uint16 actionTypeID,
                                           DcmDataset* reqDataset,
-                                          Uint16& rspStatusCode);
+                                          Uint16& rspStatusCode,
+                                          const OFString& reqSOPClassUID = "");
 
     /** This function sends N-EVENT-REPORT request and receives the corresponding response
      *  @param presID         [in]  The ID of the presentation context to be used for sending
@@ -588,6 +704,11 @@ public:
      *                                        for deleting the returned object.
      *  @param rspStatusCode            [out] The response status code received. 0 means success,
      *                                        others can be found in the DICOM standard.
+     *  @param reqSOPClassUID           [in]  Optional Requested SOP Class UID (0000,0003) to send
+     *                                        instead of the presentation context's abstract syntax.
+     *                                        Needed e.g. for UPS, where N-SET over the Pull
+     *                                        presentation context must still name the UPS Push SOP
+     *                                        Class. Empty = use the abstract syntax.
      *  @return EC_Normal if request could be issued and response was received successfully,
      *          an error code otherwise. If a code different from EC_Normal is returned, other
      *          output like rspStatusCode may be invalid.
@@ -596,7 +717,36 @@ public:
                                         const OFString& requestedSopInstanceUID,
                                         DcmDataset* modificationList,
                                         DcmDataset*& attributeList,
-                                        Uint16& rspStatusCode);
+                                        Uint16& rspStatusCode,
+                                        const OFString& reqSOPClassUID = "");
+
+    /** This function sends N-GET request and receives the corresponding response.
+     *  @param presID                   [in]  The ID of the presentation context to be used for sending
+     *                                        the request message. Should not be 0.
+     *  @param requestedSopInstanceUID  [in]  The requested SOP Instance UID
+     *  @param attributeIdentifierList  [in]  List of attribute tags to retrieve. If empty, no
+     *                                        Attribute Identifier List is sent and all attributes
+     *                                        are assumed per PS3.7 Section 10.1.2.1.5.
+     *  @param attributeList            [out] Pointer to the attribute list returned by the SCP.
+     *                                        May be NULL if the SCP returns no dataset.
+     *                                        The caller is responsible for deleting the returned object.
+     *  @param rspStatusCode            [out] The response status code received. 0 means success,
+     *                                        others can be found in the DICOM standard.
+     *  @param reqSOPClassUID           [in]  Optional Requested SOP Class UID (0000,0003) to send
+     *                                        instead of the presentation context's abstract syntax.
+     *                                        Needed e.g. for UPS, where N-GET over the Pull
+     *                                        presentation context must still name the UPS Push SOP
+     *                                        Class. Empty = use the abstract syntax.
+     *  @return EC_Normal if request could be issued and response was received successfully,
+     *          an error code otherwise. If a code different from EC_Normal is returned, other
+     *          output like rspStatusCode may be invalid.
+     */
+    virtual OFCondition sendNGETRequest(const T_ASC_PresentationContextID presID,
+                                        const OFString& requestedSopInstanceUID,
+                                        const OFList<DcmTagKey>& attributeIdentifierList,
+                                        DcmDataset*& attributeList,
+                                        Uint16& rspStatusCode,
+                                        const OFString& reqSOPClassUID = "");
 
     /** Function handling a single C-GET, C-FIND or C-MOVE Response, used by
      *  handleCGETResponse(), handleFINDResponse() and handleMOVEResponse().
@@ -739,6 +889,17 @@ public:
      */
     void setProgressNotificationMode(const OFBool mode);
 
+    /** Set the maximum permitted sequence nesting depth for parsing
+     *  datasets received over the network. This limit is applied to
+     *  each dataset received via receiveDIMSEDataset().
+     *  - Value 0 (default): apply the compile-time default
+     *    (DCMTK_MAX_SEQUENCE_NESTING)
+     *  - Value -1: disable the check (allow unlimited nesting)
+     *  - Value > 0: use this value as the maximum nesting depth
+     *  @param maxDepth maximum nesting depth setting
+     */
+    void setMaxNestingDepth(const Sint32 maxDepth);
+
     /* Get methods */
 
     /** Get current connection status
@@ -830,6 +991,14 @@ public:
      *  @return The current progress notification mode, enabled if OFTrue
      */
     OFBool getProgressNotificationMode() const;
+
+    /** Return the maximum permitted sequence nesting depth for
+     *  parsing datasets received over the network.
+     *  @return maximum nesting depth setting
+     *    (0 = compile-time default DCMTK_MAX_SEQUENCE_NESTING,
+     *    -1 = unlimited)
+     */
+    Sint32 getMaxNestingDepth() const;
 
     /** Returns whether SCU is configured to create a TLS connection with the SCP
      *  @return OFTrue if TLS mode has been enabled, OFFalse otherwise
@@ -956,7 +1125,7 @@ protected:
      *  completely by calling setProgressNotificationMode().
      *  @param byteCount [in] Number of bytes sent so far
      */
-    virtual void notifySENDProgress(const unsigned long byteCount);
+    virtual void notifySENDProgress(const Uint64 byteCount);
 
     /** This function is called while receiving DIMSE messages, i.e.\ on each PDV of a dataset.
      *  The default implementation just prints a TRACE message on the number of bytes received
@@ -965,7 +1134,7 @@ protected:
      *  completely by calling setProgressNotificationMode().
      *  @param byteCount [in] Number of bytes received so far
      */
-    virtual void notifyRECEIVEProgress(const unsigned long byteCount);
+    virtual void notifyRECEIVEProgress(const Uint64 byteCount);
 
     /** Check given N-EVENT-REPORT request and dataset for validity. This method is called by
      *  handleEVENTREPORTRequest() before sending the response in order to determine the
@@ -1020,13 +1189,13 @@ protected:
      *  @param callbackContext [in] The desired user callback data
      *  @param byteCount       [in] Progress bytes count
      */
-    static void callbackSENDProgress(void* callbackContext, unsigned long byteCount);
+    static void callbackSENDProgress(void* callbackContext, Uint64 byteCount);
 
     /** Callback function used for receiving DIMSE messages.
      *  @param callbackContext [in] The desired user callback data
      *  @param byteCount       [in] Progress bytes count
      */
-    static void callbackRECEIVEProgress(void* callbackContext, unsigned long byteCount);
+    static void callbackRECEIVEProgress(void* callbackContext, Uint64 byteCount);
 
 private:
     /** Private undefined copy-constructor. Shall never be called.
@@ -1135,6 +1304,11 @@ private:
 
     /// Progress notification mode (default: enabled)
     OFBool m_progressNotificationMode;
+
+    /// Maximum sequence nesting depth for parsing received datasets
+    /// (0 = compile-time default DCMTK_MAX_SEQUENCE_NESTING,
+    /// -1 = unlimited)
+    Sint32 m_maxNestingDepth;
 
     /// Flag indicating whether secure mode has been enabled (default: disabled)
     OFBool m_secureConnectionEnabled;

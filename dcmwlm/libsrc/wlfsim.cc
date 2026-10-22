@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1996-2024, OFFIS e.V.
+ *  Copyright (C) 1996-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -53,17 +53,38 @@ class WlmFileSystemInteractionManager::MatchingKeys
     keys.push_back(OFMake_pair(DCM_PatientName,OFTrue));
     keys.push_back(OFMake_pair(DCM_ResponsiblePerson,OFTrue));
     keys.push_back(OFMake_pair(DCM_ResponsiblePersonRole,OFTrue));
+    keys.push_back(OFMake_pair(DCM_ResponsibleOrganization,OFTrue));
     keys.push_back(OFMake_pair(DCM_PatientID,OFFalse));
     keys.push_back(OFMake_pair(DCM_AccessionNumber,OFTrue));
     keys.push_back(OFMake_pair(DCM_RequestedProcedureID,OFTrue));
     keys.push_back(OFMake_pair(DCM_ReferringPhysicianName,OFTrue));
     keys.push_back(OFMake_pair(DCM_PatientSex,OFTrue));
+    keys.push_back(OFMake_pair(DCM_PatientSpeciesDescription,OFTrue));
+    keys.push_back(OFMake_pair(DCM_PatientSexNeutered,OFTrue));
+    keys.push_back(OFMake_pair(DCM_PatientBreedDescription,OFTrue));
     keys.push_back(OFMake_pair(DCM_RequestingPhysician,OFTrue));
     keys.push_back(OFMake_pair(DCM_AdmissionID,OFTrue));
     keys.push_back(OFMake_pair(DCM_RequestedProcedurePriority,OFTrue));
     keys.push_back(OFMake_pair(DCM_PatientBirthDate,OFTrue));
     keys.push_back(OFMake_pair(DCM_IssuerOfPatientID,OFTrue));
     combinedKeys.push_back(OFMake_pair(DCM_StudyDate,DCM_StudyTime));
+    sequenceKeys.push_back(OFMake_pair(DCM_PatientSpeciesCodeSequence,MatchingKeys()));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodeValue,OFTrue));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodingSchemeDesignator,OFTrue));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodingSchemeVersion,OFTrue));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodeMeaning,OFTrue));
+    sequenceKeys.push_back(OFMake_pair(DCM_PatientBreedCodeSequence,MatchingKeys()));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodeValue,OFTrue));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodingSchemeDesignator,OFTrue));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodingSchemeVersion,OFTrue));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodeMeaning,OFTrue));
+    sequenceKeys.push_back(OFMake_pair(DCM_BreedRegistrationSequence,MatchingKeys()));
+    sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_BreedRegistrationNumber,OFTrue));
+    sequenceKeys.back().second.sequenceKeys.push_back(OFMake_pair(DCM_BreedRegistryCodeSequence,MatchingKeys()));
+    sequenceKeys.back().second.sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodeValue,OFTrue));
+    sequenceKeys.back().second.sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodingSchemeDesignator,OFTrue));
+    sequenceKeys.back().second.sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodingSchemeVersion,OFTrue));
+    sequenceKeys.back().second.sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_CodeMeaning,OFTrue));
     sequenceKeys.push_back(OFMake_pair(DCM_ScheduledProcedureStepSequence,MatchingKeys()));
     sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_ScheduledStationAETitle,OFFalse));
     sequenceKeys.back().second.keys.push_back(OFMake_pair(DCM_Modality,OFFalse));
@@ -155,6 +176,32 @@ OFCondition WlmFileSystemInteractionManager::DisconnectFromFileSystem()
 
 // ----------------------------------------------------------------------------
 
+OFBool WlmFileSystemInteractionManager::IsValidAETitleForFilesystem( const OFString& aeTitle )
+{
+  // Length must be 1..16 (DICOM AE VR limit).
+  if( aeTitle.empty() || aeTitle.length() > 16 )
+    return OFFalse;
+
+  // OFStandard::sanitizeAETitle() keeps '.' in its allow list (the function
+  // is also used in shell-substitution contexts where dots are common in
+  // AE titles), so reject dots explicitly here. Rejecting the entire
+  // character avoids any need to reason about platform-specific path
+  // normalization corner cases (".", "..", trailing dots on Windows etc.).
+  if( aeTitle.find('.') != OFString_npos )
+    return OFFalse;
+
+  // Delegate the remaining character check to OFStandard::sanitizeAETitle().
+  // If the sanitizer would change any byte, the AE title contains characters
+  // that are not safe to use as a single filesystem path component (path
+  // separators, NUL, control bytes, bytes outside the printable ASCII range
+  // and shell metacharacters).
+  OFString sanitized = aeTitle;
+  OFStandard::sanitizeAETitle( sanitized );
+  return ( sanitized == aeTitle ) ? OFTrue : OFFalse;
+}
+
+// ----------------------------------------------------------------------------
+
 OFBool WlmFileSystemInteractionManager::IsCalledApplicationEntityTitleSupported( const OFString& calledApplicationEntityTitlev )
 // Date         : July 11, 2002
 // Author       : Thomas Wilkens
@@ -167,6 +214,15 @@ OFBool WlmFileSystemInteractionManager::IsCalledApplicationEntityTitleSupported(
 {
   // copy value
   calledApplicationEntityTitle = calledApplicationEntityTitlev;
+
+  // Reject AE titles that are not safe to use as a filesystem path component.
+  // This guards against path traversal via path separators or "../" segments
+  // smuggled in through the wire-side AE title.
+  if( !IsValidAETitleForFilesystem( calledApplicationEntityTitle ) )
+  {
+    DCMWLM_WARN( "Refusing called AE title because it is not safe to use as a directory name (contains path separators, control characters or is \".\"/\"..\"); rejecting association" );
+    return( OFFalse );
+  }
 
   // Determine complete path to the files that make up the data source.
   OFString fullPath( dfPath );
@@ -322,49 +378,25 @@ void WlmFileSystemInteractionManager::GetAttributeValueForMatchingRecord( DcmTag
   DcmSequenceOfItems *sequenceElement = NULL, *tmp = NULL;
   unsigned long i;
   const char *val = NULL;
-  Uint16 v;
   size_t len = 0;
 
   // if the element in question is not contained in another sequence
   if( numOfSuperiorSequences == 0 )
   {
     // simply find and get this element in the matching dataset (on the main level);
-    // here, we have to distinguish two cases: attribute PregnancyStatus has to be re-
-    // trieved as a Uint16 value (also note for this case, that this attribute can only
-    // occur on the main level, it will never be contained in a sequence), all other
-    // attributes have to be retrieved as strings
-    if( tag == DCM_PregnancyStatus )
+    // the value is retrieved as a string, note that findAndGetOFStringArray() also
+    // converts values of binary value representations (e.g. US, as used by attribute
+    // PregnancyStatus) to their decimal string representation
+    OFString stringValue;
+    cond = matchingRecords[idx]->findAndGetOFStringArray( tag, stringValue, OFFalse );
+    if( cond.bad() && tag == DCM_PregnancyStatus )
     {
-      cond = matchingRecords[idx]->findAndGetUint16( tag, v, 0, OFFalse );
-      if( cond.good() )
-      {
-        len = 20;
-        value = new char[len];
-        OFStandard::snprintf(value, len, "%u", v );
-      }
-      else
-      {
-        len = 2;
-        value = new char[len];
-        OFStandard::strlcpy( value, "4", len );           // a value of "4" in attribute PregnancyStatus means "unknown" in DICOM
-      }
+      // a value of "4" in attribute PregnancyStatus means "unknown" in DICOM
+      stringValue = "4";
     }
-    else
-    {
-      cond = matchingRecords[idx]->findAndGetString( tag, val, OFFalse );
-      if( cond.good() && val != NULL )
-      {
-        len = strlen( val ) + 1;
-        value = new char[len];
-        OFStandard::strlcpy( value, val, len );
-      }
-      else
-      {
-        len = 1;
-        value = new char[len];
-        OFStandard::strlcpy( value, "", len );
-      }
-    }
+    len = stringValue.length() + 1;
+    value = new char[len];
+    OFStandard::strlcpy( value, stringValue.c_str(), len );
   }
   else
   {
@@ -458,7 +490,7 @@ OFBool WlmFileSystemInteractionManager::DatasetIsComplete( DcmDataset *dataset )
 // Return Value : OFTrue in case the given dataset contains all necessary return type 1 information,
 //                OFFalse otherwise.
 {
-  DcmElement *scheduledProcedureStepSequence = NULL;
+  DcmSequenceOfItems *scheduledProcedureStepSequence = NULL;
 
   // initialize returnValue
   OFBool complete = OFTrue;
@@ -468,7 +500,7 @@ OFBool WlmFileSystemInteractionManager::DatasetIsComplete( DcmDataset *dataset )
   // the dataset is considered to be incomplete...
   // ...if the ScheduledProcedureStepSequence is missing or
   // ...if the ScheduledProcedureStepSequence does not have exactly one item
-  if( dataset->findAndGetElement( DCM_ScheduledProcedureStepSequence, scheduledProcedureStepSequence ).bad() || ((DcmSequenceOfItems*)scheduledProcedureStepSequence)->card() != 1 )
+  if( dataset->findAndGetSequence( DCM_ScheduledProcedureStepSequence, scheduledProcedureStepSequence ).bad() || scheduledProcedureStepSequence->card() != 1 )
   {
     DCMWLM_DEBUG("- ScheduledProcedureStepSequence " << DCM_ScheduledProcedureStepSequence << " is missing or does not have exactly one item");
     complete = OFFalse;
@@ -477,7 +509,7 @@ OFBool WlmFileSystemInteractionManager::DatasetIsComplete( DcmDataset *dataset )
   {
     // so the ScheduledProcedureStepSequence is existent and has exactly one item;
     // get this one and only item from the ScheduledProcedureStepSequence
-    DcmItem *scheduledProcedureStepSequenceItem = ((DcmSequenceOfItems*)scheduledProcedureStepSequence)->getItem(0);
+    DcmItem *scheduledProcedureStepSequenceItem = scheduledProcedureStepSequence->getItem(0);
 
     // the dataset is considered to be incomplete...
     // ...if ScheduledStationAETitle is missing or empty in the ScheduledProcedureStepSequence, or
@@ -528,11 +560,14 @@ OFBool WlmFileSystemInteractionManager::ReferencedStudyOrPatientSequenceIsAbsent
 // Return Value : OFTrue in case the sequence attribute is absent (and cannot be added to the dataset)
 //                or existent but non-empty and incomplete, OFFalse otherwise.
 {
-  DcmElement *sequence = NULL;
+  DcmSequenceOfItems *sequence = NULL;
   OFBool result;
 
   // check whether the type 2 sequence attribute is absent
-  if( dset->findAndGetElement( sequenceTagKey, sequence ).bad() )
+  // (findAndGetSequence also fails if the attribute is present but does not have
+  //  a sequence VR, e.g. due to a VR-spoofed Explicit VR encoding; in that case
+  //  the malformed element is replaced below with a proper empty sequence)
+  if( dset->findAndGetSequence( sequenceTagKey, sequence ).bad() )
   {
     DCMWLM_DEBUG("- " << DcmTag(sequenceTagKey).getTagName() << " " << sequenceTagKey << " is missing");
     // try to add it to the dataset and return OFFalse if successful
@@ -548,17 +583,17 @@ OFBool WlmFileSystemInteractionManager::ReferencedStudyOrPatientSequenceIsAbsent
   {
     // if the sequence attribute is existent but empty, we want to return OFFalse
     // (note that the sequence is actually type 2, so being empty is ok)
-    if( ((DcmSequenceOfItems*)sequence)->card() == 0 )
+    if( sequence->card() == 0 )
       result = OFFalse;
     else
     {
       // if the sequence attribute is existent and non-empty, we need
       // to check every item in the sequence for completeness
       result = OFFalse;
-      for( unsigned long i=0 ; i<((DcmSequenceOfItems*)sequence)->card() && !result ; i++ )
+      for( unsigned long i=0 ; i<sequence->card() && !result ; i++ )
       {
-        if( AttributeIsAbsentOrEmpty( DCM_ReferencedSOPClassUID, ((DcmSequenceOfItems*)sequence)->getItem(i) ) ||
-            AttributeIsAbsentOrEmpty( DCM_ReferencedSOPInstanceUID, ((DcmSequenceOfItems*)sequence)->getItem(i) ) )
+        if( AttributeIsAbsentOrEmpty( DCM_ReferencedSOPClassUID, sequence->getItem(i) ) ||
+            AttributeIsAbsentOrEmpty( DCM_ReferencedSOPInstanceUID, sequence->getItem(i) ) )
           result = OFTrue;
       }
       if ( result )

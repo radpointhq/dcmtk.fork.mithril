@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1993-2025, OFFIS e.V.
+ *  Copyright (C) 1993-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -725,9 +725,13 @@ static void DB_DuplicateElement (DB_SmallDcmElmt *src, DB_SmallDcmElmt *dst)
     if (src -> ValueLength == 0)
         dst -> PValueField = NULL;
     else {
-        dst -> PValueField = (char *)malloc ((int) src -> ValueLength+1);
-        memset(dst->PValueField, 0, (size_t)(src->ValueLength+1));
+        // use a size_t cast (not int) for the allocation size to avoid a sign flip/truncation
+        // for large ValueLength values, which would otherwise make the allocation smaller than
+        // the subsequent memcpy and cause a heap buffer overflow.
+        dst -> PValueField = (char *)malloc ((size_t) src -> ValueLength + 1);
+        // only access the buffer after a successful allocation (memset/memcpy must not run on NULL)
         if (dst->PValueField != NULL) {
+            memset(dst->PValueField, 0, (size_t)(src->ValueLength) + 1);
             memcpy (dst -> PValueField,  src -> PValueField,
                 (size_t) src -> ValueLength);
         } else {
@@ -1389,8 +1393,8 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::startFindRequest(
                 char *pc ;
                 char level [50] ;
 
-                strncpy(level, (char*)elem.PValueField,
-                        (elem.ValueLength<50)? (size_t)(elem.ValueLength) : 49) ;
+                /* always NUL-terminates and never overflows "level" */
+                OFStandard::strlcpy(level, (char*)elem.PValueField, sizeof(level)) ;
 
                 /*** Skip this two lines if you want strict comparison
                 **/
@@ -2077,7 +2081,8 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::startMoveRequest(
                 char *pc ;
                 char level [50] ;
 
-                strncpy (level, (char *) elem. PValueField, (size_t)((elem. ValueLength < 50) ? elem. ValueLength : 49)) ;
+                /* always NUL-terminates and never overflows "level" */
+                OFStandard::strlcpy (level, (char *) elem. PValueField, sizeof(level)) ;
 
                 /*** Skip this two lines if you want strict comparison
                 **/
@@ -2401,7 +2406,6 @@ int DcmQueryRetrieveIndexDatabaseHandle::deleteOldestStudy(StudyDescRecord *pStu
     int oldestStudy ;
     double OldestDate ;
     int s ;
-    size_t n ;
     int idx = 0 ;
     IdxRecord idxRec ;
 
@@ -2424,10 +2428,14 @@ int DcmQueryRetrieveIndexDatabaseHandle::deleteOldestStudy(StudyDescRecord *pStu
     DCMQRDB_DEBUG("deleteOldestStudy oldestStudy = " << oldestStudy);
 #endif
 
-    n = strlen(pStudyDesc[oldestStudy].StudyInstanceUID) ;
     while ( DB_IdxRead (idx, &idxRec) == EC_Normal ) {
 
-    if ( ! ( strncmp(idxRec. StudyInstanceUID, pStudyDesc[oldestStudy].StudyInstanceUID, n) ) ) {
+    /* The Study Instance UID must match exactly. A prefix comparison would
+     * also remove all studies whose UID happens to start with the UID of the
+     * study selected for deletion, which is a common relation for UIDs that
+     * use an unpadded counter as their last component.
+     */
+    if ( 0 == strcmp(idxRec. StudyInstanceUID, pStudyDesc[oldestStudy].StudyInstanceUID) ) {
         DB_IdxRemove (idx) ;
         deleteImageFile(idxRec.filename);
     }
@@ -2452,13 +2460,11 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::deleteOldestImages(StudyDescRec
     ImagesofStudyArray *StudyArray ;
     IdxRecord idxRec ;
     int nbimages = 0 , s = 0;
-    size_t n ;
     long DeletedSize ;
 
 #ifdef DEBUG
     DCMQRDB_DEBUG("deleteOldestImages RequiredSize = " << RequiredSize);
 #endif
-    n = strlen(StudyUID) ;
     StudyArray = (ImagesofStudyArray *)malloc(MAX_NUMBER_OF_IMAGES * sizeof(ImagesofStudyArray)) ;
 
     if (StudyArray == NULL) {
@@ -2471,12 +2477,17 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::deleteOldestImages(StudyDescRec
 
     DB_IdxInitLoop (&(handle_ -> idxCounter)) ;
     while ( DB_IdxGetNext(&(handle_ -> idxCounter), &idxRec) == EC_Normal ) {
-    if ( ! ( strncmp(idxRec. StudyInstanceUID, StudyUID, n) ) ) {
-
-        StudyArray[nbimages]. idxCounter = handle_ -> idxCounter ;
-        StudyArray[nbimages]. RecordedDate = idxRec. RecordedDate ;
-        StudyArray[nbimages++]. ImageSize = idxRec. ImageSize ;
-    }
+        /* exact match, see the comment in deleteOldestStudy() */
+        if ( 0 == strcmp(idxRec. StudyInstanceUID, StudyUID) ) {
+            StudyArray[nbimages]. idxCounter = handle_ -> idxCounter ;
+            StudyArray[nbimages]. RecordedDate = idxRec. RecordedDate ;
+            StudyArray[nbimages++]. ImageSize = idxRec. ImageSize ;
+            if (nbimages == MAX_NUMBER_OF_IMAGES) {
+                // too many images in this study, bail out
+                DCMQRDB_ERROR("maximum number of images per study (" << MAX_NUMBER_OF_IMAGES << ") exceeded");
+                return QR_EC_IndexDatabaseError;
+            }
+        }
     }
 
     /** Sort the StudyArray in order to have the oldest images first
@@ -2499,6 +2510,17 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::deleteOldestImages(StudyDescRec
     DeletedSize = 0 ;
 
     while ( DeletedSize < RequiredSize ) {
+
+    if (s >= nbimages) {
+        // We have deleted all images recorded for this study but still did not
+        // free RequiredSize bytes. This means the study descriptor's StudySize
+        // is out of sync with the actual index records. Stop here instead of
+        // reading past the end of StudyArray.
+        DCMQRDB_WARN("deleteOldestImages: study descriptor out of sync with index, "
+            << "deleted all " << nbimages << " image(s) of this study but freed only "
+            << DeletedSize << " of " << RequiredSize << " required bytes");
+        break;
+    }
 
     IdxRecord idxRemoveRec ;
     DB_IdxRead (StudyArray[s]. idxCounter, &idxRemoveRec) ;
@@ -2563,6 +2585,25 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::checkupinStudyDesc(StudyDescRec
     s = matchStudyUIDInStudyDesc (pStudyDesc, StudyUID,
                      (int)(handle_ -> maxStudiesAllowed)) ;
 
+    OFCondition cond;
+
+    /** If the study is not registered yet and there is no free entry left,
+     *  matchStudyUIDInStudyDesc() returns the number of entries. That value must
+     *  not be used as an index, so an entry is freed first. An image that does not
+     *  fit into a study at all is rejected before that, because it would be
+     *  rejected below anyway and no existing study should be deleted for it.
+     */
+
+    if ( s > ( handle_ -> maxStudiesAllowed - 1 ) ) {
+    if ( imageSize > handle_ -> maxBytesPerStudy ) {
+#ifdef DEBUG
+        DCMQRDB_DEBUG("checkupinStudyDesc: imageSize = " << imageSize << " too large");
+#endif
+        return ( QR_EC_IndexDatabaseError ) ;
+    }
+    s = deleteOldestStudy(pStudyDesc) ;
+    }
+
     /** If Study already exists
      */
 
@@ -2583,9 +2624,9 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::checkupinStudyDesc(StudyDescRec
 
         RequiredSize = imageSize -
             ( handle_ -> maxBytesPerStudy - pStudyDesc[s]. StudySize ) ;
-        deleteOldestImages(pStudyDesc, s, StudyUID, RequiredSize) ;
+        cond = deleteOldestImages(pStudyDesc, s, StudyUID, RequiredSize) ;
+        if (cond.bad()) return cond;
     }
-
 
     }
     else {
@@ -2598,8 +2639,6 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::checkupinStudyDesc(StudyDescRec
 #endif
         return ( QR_EC_IndexDatabaseError ) ;
     }
-    if ( s > ( handle_ -> maxStudiesAllowed - 1 ) )
-        s = deleteOldestStudy(pStudyDesc) ;
 
     }
 
@@ -2636,7 +2675,12 @@ OFCondition DcmQueryRetrieveIndexDatabaseHandle::removeDuplicateImage(
     studyIdx = matchStudyUIDInStudyDesc (pStudyDesc, (char*)StudyInstanceUID,
                         (int)(handle_ -> maxStudiesAllowed)) ;
 
-    if ( pStudyDesc[studyIdx].NumberofRegistratedImages == 0 ) {
+    /* If the study is not registered yet and there is no free entry left,
+     * matchStudyUIDInStudyDesc() returns the number of entries. That value must not
+     * be used as an index, and an unregistered study cannot have any images anyway.
+     */
+    if ( ( studyIdx >= handle_ -> maxStudiesAllowed ) ||
+         ( pStudyDesc[studyIdx].NumberofRegistratedImages == 0 ) ) {
     /* no study images, cannot be any old images */
     return EC_Normal;
     }

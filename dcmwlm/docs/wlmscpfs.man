@@ -99,6 +99,15 @@ returned character set:
   -csk  --keep-char-set
           return character set provided in file
 
+handling of return key attributes:
+
+  +ear  --enable-all-return
+          accept any (non-sequence) attribute on main
+          dataset level as return key
+
+  -ear  --disable-all-return
+          accept supported return keys only (default)
+
 other processing options:
 
   -nse  --no-sq-expansion
@@ -193,6 +202,130 @@ other network options:
           disable hostname lookup
 \endverbatim
 
+\subsection wlmscp_tls_options transport layer security (TLS) options
+\verbatim
+transport protocol stack:
+
+  -tls  --disable-tls
+          use normal TCP/IP connection (default)
+
+  +tls  --enable-tls  [p]rivate key file, [c]ertificate file: string
+          use authenticated secure TLS connection
+
+private key password (only with --enable-tls):
+
+  +ps   --std-passwd
+          prompt user to type password on stdin (default)
+
+  +pw   --use-passwd  [p]assword: string
+          use specified password
+
+  -pw   --null-passwd
+          use empty string as password
+
+key and certificate file format:
+
+  -pem  --pem-keys
+          read keys and certificates as PEM file (default)
+
+  -der  --der-keys
+          read keys and certificates as DER file
+
+certification authority:
+
+  +cf   --add-cert-file  [f]ilename: string
+          add certificate file to list of certificates
+
+  +cd   --add-cert-dir  [d]irectory: string
+          add certificates in d to list of certificates
+
+  +crl  --add-crl-file  [f]ilename: string
+          add certificate revocation list file
+          (implies --enable-crl-vfy)
+
+  +crv  --enable-crl-vfy
+          enable leaf CRL verification
+
+  +cra  --enable-crl-all
+          enable full chain CRL verification
+
+security profile:
+
+  +ph   --list-profiles
+          list supported TLS profiles and exit
+
+  +pg   --profile-8996
+          BCP 195 RFC 8996 TLS Profile (default)
+
+  +pm   --profile-8996-mod
+          Modified BCP 195 RFC 8996 TLS Profile
+
+          # only available if underlying TLS library supports
+          # all TLS features required for this profile
+
+  +py   --profile-bcp195-nd
+          Non-downgrading BCP 195 TLS Profile (retired)
+
+  +px   --profile-bcp195
+          BCP 195 TLS Profile (retired)
+
+  +pz   --profile-bcp195-ex
+          Extended BCP 195 TLS Profile (retired)
+
+  +pb   --profile-basic
+          Basic TLS Secure Transport Connection Profile (retired)
+
+          # only available if underlying TLS library supports 3DES
+
+  +pa   --profile-aes
+          AES TLS Secure Transport Connection Profile (retired)
+
+  +pn   --profile-null
+          Authenticated unencrypted communication
+          (retired, was used in IHE ATNA)
+
+ciphersuite:
+
+  +cc   --list-ciphers
+          list supported TLS ciphersuites and exit
+
+  +cs   --cipher  [c]iphersuite name: string
+          add ciphersuite to list of negotiated suites
+
+  +dp   --dhparam  [f]ilename: string
+          read DH parameters for DH/DSS ciphersuites
+
+server name indication:
+
+        --no-sni
+          do not use SNI (default)
+
+        --expect-sni  [s]erver name: string
+          expect requests for server name s
+
+pseudo random generator:
+
+  +rs   --seed  [f]ilename: string
+          seed random generator with contents of f
+
+  +ws   --write-seed
+          write back modified seed (only with --seed)
+
+  +wf   --write-seed-file  [f]ilename: string (only with --seed)
+          write modified seed to file f
+
+peer authentication:
+
+  -rc   --require-peer-cert
+          verify peer certificate, fail if absent (default)
+
+  -vc   --verify-peer-cert
+          verify peer certificate if present
+
+  -ic   --ignore-peer-cert
+          don't verify peer certificate
+\endverbatim
+
 \subsection wlmscp_output_options output options
 \verbatim
 general:
@@ -241,6 +374,23 @@ considered to be complete if it contains all necessary type 1 information
 which the SCP might have to return to an SCU in a C-FIND response message.
 Table K.6-1 in part 4 annex K of the DICOM standard lists all corresponding
 type 1 attributes (see column "Return Key Type").
+
+The called Application Entity Title from an incoming A-ASSOCIATE-RQ is used
+as a subdirectory name below the \e --data-file-path directory in order to
+look up the worklist files that this association may access.  The DICOM VR
+AE (see DICOM PS3.5 Section 6.1.3) permits the characters "/" (forward slash)
+and "." (full stop), so a conformant peer can send an AE title such as
+"../OTHER" that would resolve to a sibling directory of the configured
+worklist root.  To prevent this, \b wlmscpfs rejects any A-ASSOCIATE-RQ
+whose called AE title is not safe to use as a single filesystem path
+component.  The set of accepted characters is letters, digits, space and
+the characters "-", ":", "@" and "_"; any other byte (path separators
+"/" and "\\", NUL, control bytes, bytes outside the printable ASCII range,
+shell metacharacters as well as the dot character) causes the association
+to be rejected.  Dots are rejected outright (rather than only the
+standalone components "." and "..") because real-world AE titles never
+contain dots and rejecting the entire character avoids any need to reason
+about platform-specific path normalization corner cases.
 
 \subsection wlmscpfs_request_files Writing Request Files
 
@@ -300,6 +450,13 @@ characters, the file name computed by \b wlmscpfs might be broken and thus
 cannot be written successfully or will look broken once written.  Also, an empty
 Patient ID is used as such, i.e. the \#p will be replaced with an empty string.
 
+For security reasons, the values substituted for the placeholders \#a, \#c and
+\#p are sanitized before they are inserted into the resulting file name: path
+separators ("/", "\\") and other characters that are not safe in a file name
+component are replaced with the underscore character ("_").  This prevents
+attacker-controlled values transmitted over the network (called/calling AE
+title, Patient ID) from escaping the configured request file directory.
+
 \subsection wlmscpfs_dicom_conformance DICOM Conformance
 
 The \b wlmscpfs application supports the following SOP Classes as an SCP:
@@ -347,8 +504,29 @@ matching keys:
 (0010,0021) IssuerOfPatientID
 (0010,0030) PatientBirthDate
 (0010,0040) PatientSex
-(0010,2297) Responsible Person
-(0010,2298) Responsible Person Role
+(0010,2201) PatientSpeciesDescription
+(0010,2202) PatientSpeciesCodeSequence
+  (0008,0100) > CodeValue
+  (0008,0102) > CodingSchemeDesignator
+  (0008,0103) > CodingSchemeVersion
+  (0008,0104) > CodeMeaning
+(0010,2203) PatientSexNeutered
+(0010,2292) PatientBreedDescription
+(0010,2293) PatientBreedCodeSequence
+  (0008,0100) > CodeValue
+  (0008,0102) > CodingSchemeDesignator
+  (0008,0103) > CodingSchemeVersion
+  (0008,0104) > CodeMeaning
+(0010,2294) BreedRegistrationSequence
+  (0010,2295) > BreedRegistrationNumber
+  (0010,2296) > BreedRegistryCodeSequence
+    (0008,0100) > > CodeValue
+    (0008,0102) > > CodingSchemeDesignator
+    (0008,0103) > > CodingSchemeVersion
+    (0008,0104) > > CodeMeaning
+(0010,2297) ResponsiblePerson
+(0010,2298) ResponsiblePersonRole
+(0010,2299) ResponsibleOrganization
 (0032,1032) RequestingPhysician
 (0038,0010) AdmissionID
 (0040,0100) ScheduledProcedureStepSequence
@@ -366,11 +544,23 @@ As return keys the following attributes are currently supported by \b wlmscpfs:
 \verbatim
 (0008,0020) StudyDate
 (0008,0030) StudyTime
+(0008,1030) StudyDescription
 (0008,0050) AccessionNumber
 (0008,0080) InstitutionName
 (0008,0081) InstitutionAddress
 (0008,1040) InstitutionalDepartmentName
 (0008,0090) ReferringPhysicianName
+(0008,0092) ReferringPhysicianAddress
+(0008,0082) InstitutionCodeSequence
+  (0008,0100) > CodeValue
+  (0008,0102) > CodingSchemeDesignator
+  (0008,0103) > CodingSchemeVersion
+  (0008,0104) > CodeMeaning
+(0008,1041) InstitutionalDepartmentTypeCodeSequence
+  (0008,0100) > CodeValue
+  (0008,0102) > CodingSchemeDesignator
+  (0008,0103) > CodingSchemeVersion
+  (0008,0104) > CodeMeaning
 (0008,1080) AdmittingDiagnosesDescription
 (0008,1110) ReferencedStudySequence
   (0008,1150) > ReferencedSOPClassUID
@@ -382,11 +572,32 @@ As return keys the following attributes are currently supported by \b wlmscpfs:
 (0010,0020) PatientID
 (0010,0021) IssuerOfPatientID
 (0010,0030) PatientBirthDate
+(0010,1010) PatientAge
 (0010,0040) PatientSex
 (0010,1000) OtherPatientIDs (retired)
 (0010,1001) OtherPatientNames
 (0010,1020) PatientSize
 (0010,1030) PatientWeight
+(0010,2201) PatientSpeciesDescription
+(0010,2202) PatientSpeciesCodeSequence
+  (0008,0100) > CodeValue
+  (0008,0102) > CodingSchemeDesignator
+  (0008,0103) > CodingSchemeVersion
+  (0008,0104) > CodeMeaning
+(0010,2203) PatientSexNeutered
+(0010,2292) PatientBreedDescription
+(0010,2293) PatientBreedCodeSequence
+  (0008,0100) > CodeValue
+  (0008,0102) > CodingSchemeDesignator
+  (0008,0103) > CodingSchemeVersion
+  (0008,0104) > CodeMeaning
+(0010,2294) BreedRegistrationSequence
+  (0010,2295) > BreedRegistrationNumber
+  (0010,2296) > BreedRegistryCodeSequence
+    (0008,0100) > > CodeValue
+    (0008,0102) > > CodingSchemeDesignator
+    (0008,0103) > > CodingSchemeVersion
+    (0008,0104) > > CodeMeaning
 (0010,1040) PatientAddress
 (0010,1080) MilitaryRank
 (0010,2000) MedicalAlerts
@@ -398,6 +609,7 @@ As return keys the following attributes are currently supported by \b wlmscpfs:
 (0010,21d0) LastMenstrualDate
 (0010,2297) ResponsiblePerson
 (0010,2298) ResponsiblePersonRole
+(0010,2299) ResponsibleOrganization
 (0010,4000) PatientComments
 (0020,000d) StudyInstanceUID
 (0032,1032) RequestingPhysician
@@ -457,6 +669,19 @@ As return keys the following attributes are currently supported by \b wlmscpfs:
 
 The attribute (0008,0005) SpecificCharacterSet is a special case and its
 support by \b wlmscpfs is discussed in the NOTES section above.
+
+Note that if the return key attribute (0010,21c0) PregnancyStatus is
+requested but not contained in a worklist file, it is returned with value 4
+("unknown") instead of an empty value.
+
+The option \e --enable-all-return can be used to lift the above restriction
+on the set of supported return key attributes: any other non-sequence
+attribute on the main level of the query is then also accepted as a return
+key attribute and filled with the value found in the matching worklist file,
+or returned with an empty value if the worklist file does not contain the
+attribute.  Such attributes consequently no longer cause the C-FIND response
+status "Pending with warning" to be returned.  Sequence attributes as well
+as attributes within sequences are not affected by this option.
 
 \subsection wlmscpfs_access_control Access Control
 
@@ -526,6 +751,6 @@ It is an error if no data dictionary can be loaded.
 
 \section wlmscpfs_copyright COPYRIGHT
 
-Copyright (C) 1996-2025 by OFFIS e.V., Escherweg 2, 26121 Oldenburg, Germany.
+Copyright (C) 1996-2026 by OFFIS e.V., Escherweg 2, 26121 Oldenburg, Germany.
 
 */

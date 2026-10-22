@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1996-2021, OFFIS e.V.
+ *  Copyright (C) 1996-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -246,6 +246,15 @@ class DCMTK_DCMIMGLE_EXPORT DiImage
     virtual int getBits(const int bits = 0) const
     {
         return ((bits < 1) || (bits > MAX_BITS)) ? BitsPerSample : bits;
+    }
+
+    /** check whether the pixel representation is signed or unsigned
+     *
+     ** @return true if the pixel representation is signed, false otherwise
+     */
+    virtual int hasSignedRepresentation() const
+    {
+        return hasSignedPixelRepresentation;
     }
 
     /** get color model of internal pixel representation.
@@ -526,7 +535,6 @@ class DCMTK_DCMIMGLE_EXPORT DiImage
                          const unsigned long frame,
                          const int bits);
 
-
  protected:
 
     /** constructor
@@ -646,7 +654,7 @@ class DCMTK_DCMIMGLE_EXPORT DiImage
     EP_Polarity Polarity;
 
     /// is 'true' if pixel data is signed
-    int hasSignedRepresentation;
+    int hasSignedPixelRepresentation;
     /// is 'true' if attribute 'PixelSpacing' is present
     int hasPixelSpacing;
     /// is 'true' if attribute 'ImagerPixelSpacing' is present

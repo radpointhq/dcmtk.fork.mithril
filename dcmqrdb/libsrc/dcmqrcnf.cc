@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1993-2025, OFFIS e.V.
+ *  Copyright (C) 1993-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -1112,6 +1112,15 @@ OFBool DcmQueryRetrieveConfig::writableStorageArea(const char *aeTitle) const
     if (strcmp(axs, "RW") == 0) return OFTrue;
     if (strcmp(axs, "WR") == 0) return OFTrue;
     if (strcmp(axs, "W") == 0) return OFTrue;
+    return OFFalse;
+}
+
+OFBool DcmQueryRetrieveConfig::readableStorageArea(const char *aeTitle) const
+{
+    const char *axs = getAccess((char*)aeTitle);
+    if (strcmp(axs, "R") == 0) return OFTrue;
+    if (strcmp(axs, "RW") == 0) return OFTrue;
+    if (strcmp(axs, "WR") == 0) return OFTrue;
     return OFFalse;
 }
 

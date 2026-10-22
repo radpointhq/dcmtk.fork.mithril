@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2024, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -79,7 +79,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
      *                class type as "this" object
      *  @return EC_Normal if copying was successful, error otherwise
      */
-    virtual OFCondition copyFrom(const DcmObject& rhs);
+    virtual OFCondition copyFrom(const DcmObject &rhs);
 
     /** get element type identifier
      *  @return type identifier of this class (EVR_DA)
@@ -89,7 +89,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
     /** check whether stored value conforms to the VR and to the specified VM
      *  @param vm value multiplicity (according to the data dictionary) to be checked for.
      *    (See DcmElement::checkVM() for a list of valid values.)
-     *  @param oldFormat support old ACR/NEMA format if OFTrue ('.' as a separator)
+     *  @param oldFormat support old ACR-NEMA format if OFTrue ('.' as a separator)
      *  @return status of the check, EC_Normal if value is correct, an error code otherwise
      */
     virtual OFCondition checkValue(const OFString &vm = "1-n",
@@ -107,7 +107,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
 
     /** set the element value to the current system date.
      *  The DICOM DA format supported by this function is "YYYYMMDD". If the current
-     *  system date is unavailable the date is set to "19000101" and an error code is
+     *  system date is unavailable, the date is set to "19000101" and an error code is
      *  returned.
      *  @return EC_Normal upon success, an error code otherwise
      */
@@ -122,7 +122,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
     /** get the current element value in OFDate format.
      *  Please note that the element value is expected to be in valid DICOM DA format
      *  ("YYYYMMDD", "YYYY.MM.DD" is also supported for reasons of backward compatibility).
-     *  If this function fails the result variable 'dateValue' is cleared automatically.
+     *  If this function fails, the result variable 'dateValue' is cleared automatically.
      *  @param dateValue reference to OFDate variable where the result is stored
      *  @param pos index of the element component in case of value multiplicity (0..vm-1)
      *  @param supportOldFormat if OFTrue support old (prior V3.0) date format (see above)
@@ -140,7 +140,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
      *  variable 'formattedDate' is cleared automatically.
      *  @param formattedDate reference to string variable where the result is stored
      *  @param pos index of the element component in case of value multiplicity (0..vm-1)
-     *  @param supportOldFormat if OFTrue support old (prior V3.0) date format (see above)
+     *  @param supportOldFormat if OFTrue, support old (prior V3.0) date format (see above)
      *  @return EC_Normal upon success, an error code otherwise
      */
     OFCondition getISOFormattedDate(OFString &formattedDate,
@@ -151,20 +151,20 @@ class DCMTK_DCMDATA_EXPORT DcmDate
     using DcmByteString::matches;
 
     /// @copydoc DcmByteString::matches(const OFString&,const OFString&,const OFBool) const
-    virtual OFBool matches(const OFString& key,
-                           const OFString& candidate,
+    virtual OFBool matches(const OFString &key,
+                           const OFString &candidate,
                            const OFBool enableWildCardMatching = OFTrue) const;
 
     /// @copydoc DcmByteString::combinationMatches()
-    virtual OFBool combinationMatches(const DcmElement& keySecond,
-                                      const DcmElement& candidateFirst,
-                                      const DcmElement& candidateSecond) const;
+    virtual OFBool combinationMatches(const DcmElement &keySecond,
+                                      const DcmElement &candidateFirst,
+                                      const DcmElement &candidateSecond) const;
 
     /* --- static helper functions --- */
 
     /** get the current system date.
      *  The DICOM DA format supported by this function is "YYYYMMDD". If the current
-     *  system date is unavailable the date is set to "19000101" and an error code is
+     *  system date is unavailable, the date is set to "19000101" and an error code is
      *  returned.
      *  @param dicomDate reference to string variable where the result is stored
      *  @return EC_Normal upon success, an error code otherwise
@@ -173,7 +173,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
 
     /** get the specified OFDate value in DICOM format.
      *  The DICOM DA format supported by this function is "YYYYMMDD". If the specified
-     *  date is invalid the date is set to "19000101" and an error code is returned.
+     *  date is invalid, the date is set to "19000101" and an error code is returned.
      *  @param dateValue date to be converted to DICOM format
      *  @param dicomDate reference to string variable where the result is stored
      *  @return EC_Normal upon success, an error code otherwise
@@ -183,37 +183,24 @@ class DCMTK_DCMDATA_EXPORT DcmDate
 
     /** get the specified DICOM date value in OFDate format.
      *  Please note that the specified value is expected to be in valid DICOM DA format
-     *  ("YYYYMMDD", "YYYY.MM.DD" is also supported for reasons of backward compatibility).
-     *  If this function fails, the result variable 'dateValue' is cleared automatically.
-     *  @param dicomDate string value in DICOM DA format to be converted to OFDate format.
-     *    An empty string is not regarded as valid input, since the date would be unknown.
-     *  @param dateValue reference to OFDate variable where the result is stored
-     *  @return EC_Normal upon success, an error code otherwise
-     */
-    static OFCondition getOFDateFromString(const OFString &dicomDate,
-                                           OFDate &dateValue);
-
-    /** get the specified DICOM date value in OFDate format.
-     *  Please note that the specified value is expected to be in valid DICOM DA format
-     *  ("YYYYMMDD", "YYYY.MM.DD" is also supported for reasons of backward compatibility).
+     *  (i.e. "YYYYMMDD"). If enabled, the old format from ACR-NEMA ("YYYY.MM.DD") is also
+     *  supported for reasons of backward compatibility.
      *  If this function fails, the result variable 'dateValue' is cleared automatically.
      *  @param dicomDate string value in DICOM DA format to be converted to OFDate format.
      *    An empty string is not regarded as valid input, since the date would be unknown.
      *  @param dateValue reference to OFDate variable where the result is stored
      *  @param supportOldFormat set to OFFalse to disable support for old (prior V3.0) date
-     *    format (see above).
+     *    format (see above)
      *  @return EC_Normal upon success, an error code otherwise
      */
     static OFCondition getOFDateFromString(const OFString &dicomDate,
                                            OFDate &dateValue,
-                                           const OFBool supportOldFormat);
+                                           const OFBool supportOldFormat = OFTrue);
 
     /** get the specified DICOM date value in OFDate format.
-     *  Please note that the specified value is expected to be in valid DICOM DA format
-     *  ("YYYYMMDD", "YYYY.MM.DD" is also supported for reasons of backward compatibility).
-     *  If this function fails, the result variable 'dateValue' is cleared automatically.
-     *  @param dicomDate string value in DICOM DA format to be converted to OFDate format.
-     *    An empty string is not regarded as valid input, since the date would be unknown.
+     *  @note This method is only needed for the incomprehensible DcmAttributeMatching
+     *    "magic". It is a candidate for removal.
+     *  @param dicomDate string value in DICOM DA format to be converted to OFDate format
      *  @param dicomDateSize the size (in bytes) of the string 'dicomDate' refers to
      *  @param dateValue reference to OFDate variable where the result is stored
      *  @return EC_Normal upon success, an error code otherwise
@@ -224,14 +211,15 @@ class DCMTK_DCMDATA_EXPORT DcmDate
 
     /** get the specified DICOM date value in OFDate format.
      *  Please note that the specified value is expected to be in valid DICOM DA format
-     *  ("YYYYMMDD", "YYYY.MM.DD" is also supported for reasons of backward compatibility).
+     *  (i.e. "YYYYMMDD"). If enabled, the old format from ACR-NEMA ("YYYY.MM.DD") is also
+     *  supported for reasons of backward compatibility.
      *  If this function fails, the result variable 'dateValue' is cleared automatically.
      *  @param dicomDate string value in DICOM DA format to be converted to OFDate format.
      *    An empty string is not regarded as valid input, since the date would be unknown.
      *  @param dicomDateSize the size (in bytes) of the string 'dicomDate' refers to
      *  @param dateValue reference to OFDate variable where the result is stored
      *  @param supportOldFormat set to OFFalse to disable support for old (prior V3.0) date
-     *    format (see above).
+     *    format (see above)
      *  @return EC_Normal upon success, an error code otherwise
      */
     static OFCondition getOFDateFromString(const char *dicomDate,
@@ -241,13 +229,15 @@ class DCMTK_DCMDATA_EXPORT DcmDate
 
     /** get the specified DICOM date value in ISO format.
      *  The ISO date format supported by this function is "YYYY-MM-DD". Please note
-     *  that the specified value is expected to be in valid DICOM DA format ("YYYYMMDD",
-     *  "YYYY.MM.DD" is also supported for reasons of backward compatibility).
+     *  that the specified value is expected to be in valid DICOM DA format (i.e.
+     *  "YYYYMMDD"). If enabled, the old format from ACR-NEMA ("YYYY.MM.DD") is also
+     *  supported for reasons of backward compatibility.
      *  If this function fails or the specified DICOM date value is empty, the result
      *  variable 'formattedDate' is cleared automatically.
      *  @param dicomDate string value in DICOM DA format to be converted to ISO format
      *  @param formattedDate reference to string variable where the result is stored
-     *  @param supportOldFormat if OFTrue support old (prior V3.0) date format (see above)
+     *  @param supportOldFormat set to OFFalse to disable support for old (prior V3.0)
+     *    date format (see above)
      *  @return EC_Normal upon success, an error code otherwise
      */
     static OFCondition getISOFormattedDateFromString(const OFString &dicomDate,
@@ -261,7 +251,8 @@ class DCMTK_DCMDATA_EXPORT DcmDate
      *  @param dicomDateSize the size (in bytes) of the string 'dicomDate' refers to
      *  @return OFTrue if the given string conforms to the Date format, OFFalse otherwise
      */
-    static OFBool check(const char *dicomDate, const size_t dicomDateSize);
+    static OFBool check(const char *dicomDate,
+                        const size_t dicomDateSize);
 
     /** check whether the given string conforms to a single value of VR "DA" (Date).
      *  @param dicomDate string value to be checked. An empty string is not regarded as valid
@@ -280,7 +271,7 @@ class DCMTK_DCMDATA_EXPORT DcmDate
      *  @param value string value to be checked (possibly multi-valued)
      *  @param vm value multiplicity (according to the data dictionary) to be checked for.
      *    (See DcmElement::checkVM() for a list of valid values.)
-     *  @param oldFormat support old ACR/NEMA date format if OFTrue (i.e. with "." delimiters)
+     *  @param oldFormat support old ACR-NEMA date format if OFTrue (i.e. with "." delimiters)
      *  @return status of the check, EC_Normal if value is correct, an error code otherwise
      */
     static OFCondition checkStringValue(const OFString &value,

@@ -1,5 +1,5 @@
 #
-#  Copyright (C) 1994-2020, OFFIS e.V.
+#  Copyright (C) 1994-2026, OFFIS e.V.
 #  All rights reserved.  See COPYRIGHT file for details.
 #
 #  This software and supporting documentation were developed by
@@ -138,8 +138,8 @@
 (0021,"CARDIO-D.R. 1.0",13)	IS	ImageSequenceNumber	1	PrivateTag
 (0029,"CARDIO-D.R. 1.0",00)	SQ	EdgeEnhancementSequence	1	PrivateTag
 (0029,"CARDIO-D.R. 1.0",01)	US	ConvolutionKernelSize	2	PrivateTag
-(0029,"CARDIO-D.R. 1.0",02)	DS	ConvolutionKernelCoefficients	1-n	PrivateTag
-(0029,"CARDIO-D.R. 1.0",03)	DS	EdgeEnhancementGain	1	PrivateTag
+(0029,"CARDIO-D.R. 1.0",02)	US	ConvolutionKernelCoefficients	1-n	PrivateTag
+(0029,"CARDIO-D.R. 1.0",03)	FL	EdgeEnhancementGain	1	PrivateTag
 
 (0025,"CMR42 CIRCLECVI",1010)	LO	WorkspaceID	1	PrivateTag
 (0025,"CMR42 CIRCLECVI",1020)	LO	WorkspaceTimeString	1	PrivateTag
@@ -1309,6 +1309,7 @@
 (2005,"Philips MR Imaging DD 001",b2)	FL	DiffusionDirectionFH	1	PrivateTag
 
 (2005,"Philips MR Imaging DD 005",02)	SQ	Unknown	1	PrivateTag
+(2005,"Philips MR Imaging DD 005",45)	CS	AttenuationCorrection	1	PrivateTag
 
 # Note: Some Philips devices use these private tags with reservation value
 # "Philips MR Imaging DD 001", others use "PHILIPS MR IMAGING DD 001". All attributes
@@ -2954,7 +2955,7 @@
 (0019,"SVISION",78)	DS	FilterThickness1	1	PrivateTag
 (0019,"SVISION",79)	DS	FilterThickness2	1	PrivateTag
 (0019,"SVISION",80)	IS	BuckyFormat	1	PrivateTag
-(0019,"SVISION",81)	IS	ObjectPosition	1	PrivateTag
+(0019,"SVISION",81)	ST	ObjectPosition	1	PrivateTag
 (0019,"SVISION",90)	LO	DeskCommand	1	PrivateTag
 (0019,"SVISION",A0)	DS	ExtendedExposureTime	1	PrivateTag
 (0019,"SVISION",A1)	DS	ActualExposureTime	1	PrivateTag

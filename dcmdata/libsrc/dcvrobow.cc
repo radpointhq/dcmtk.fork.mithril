@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -24,7 +24,7 @@
 #include "dcmtk/dcmdata/dcvrobow.h"
 #include "dcmtk/ofstd/ofstd.h"
 #include "dcmtk/ofstd/ofstream.h"
-#include "dcmtk/ofstd/ofuuid.h"
+#include "dcmtk/ofstd/ofuuidgn.h"
 #include "dcmtk/ofstd/offile.h"
 #include "dcmtk/dcmdata/dcjson.h"
 #include "dcmtk/dcmdata/dcdeftag.h"
@@ -436,6 +436,15 @@ OFCondition DcmOtherByteOtherWord::putString(const char *stringVal,
         const DcmEVR evr = getTag().getEVR();
         Uint8 *byteField = NULL;
         Uint16 *wordField = NULL;
+        /* reject values whose overall length would exceed the 32-bit DICOM value length
+         * limit; this also prevents an integer overflow in the allocation size below
+         */
+        const size_t bytesPerValue = (evr == EVR_OW || evr == EVR_lt) ? sizeof(Uint16) : sizeof(Uint8);
+        if (vm > DCM_UndefinedLength / bytesPerValue)
+        {
+            errorFlag = EC_ElemLengthExceeds32BitField;
+            return errorFlag;
+        }
         /* create new value field */
         if (evr == EVR_OW || evr == EVR_lt)
             wordField = new Uint16[vm];
@@ -740,6 +749,7 @@ OFCondition DcmOtherByteOtherWord::writeSignatureFormat(
 OFCondition DcmOtherByteOtherWord::writeXML(STD_NAMESPACE ostream &out,
                                             const size_t flags)
 {
+    OFCondition l_error = EC_Normal;
     /* OB/OW data requires special handling in the Native DICOM Model format */
     if (flags & DCMTypes::XF_useNativeModel)
     {
@@ -751,24 +761,21 @@ OFCondition DcmOtherByteOtherWord::writeXML(STD_NAMESPACE ostream &out,
             /* encode binary data as Base64 */
             if (flags & DCMTypes::XF_encodeBase64)
             {
-                const DcmEVR evr = getTag().getEVR();
                 out << "<InlineBinary>";
-                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue());
-                if ((evr == EVR_OW) || (evr == EVR_lt))
-                {
-                    /* Base64 encoder requires big endian input data */
-                    swapIfNecessary(EBO_BigEndian, gLocalByteOrder, byteValues, getLengthField(), sizeof(Uint16));
-                    /* update the byte order indicator variable correspondingly */
-                    setByteOrder(EBO_BigEndian);
-                }
+                /* the Native DICOM Model requires little endian byte ordering */
+                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue(EBO_LittleEndian));
                 OFStandard::encodeBase64(out, byteValues, OFstatic_cast(size_t, getLengthField()));
                 out << "</InlineBinary>" << OFendl;
             } else {
                 /* generate a new UID but the binary data is not (yet) written. */
-                OFUUID uuid;
-                out << "<BulkData uuid=\"";
-                uuid.print(out, OFUUID::ER_RepresentationHex);
-                out << "\"/>" << OFendl;
+                OFshared_ptr<OFUUID> const uuid = OFUUIDGenerator::create();
+                if (uuid) {
+                    out << "<BulkData uuid=\"";
+                    uuid->print(out, OFUUID::NotationCanonical);
+                    out << "\"/>" << OFendl;
+                } else {
+                    l_error = EC_MemoryExhausted;
+                }
             }
         }
         /* write XML end tag */
@@ -788,14 +795,8 @@ OFCondition DcmOtherByteOtherWord::writeXML(STD_NAMESPACE ostream &out,
             /* encode binary data as Base64 */
             if (flags & DCMTypes::XF_encodeBase64)
             {
-                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue());
-                if ((evr == EVR_OW) || (evr == EVR_lt))
-                {
-                    /* Base64 encoder requires big endian input data */
-                    swapIfNecessary(EBO_BigEndian, gLocalByteOrder, byteValues, getLengthField(), sizeof(Uint16));
-                    /* update the byte order indicator variable correspondingly */
-                    setByteOrder(EBO_BigEndian);
-                }
+                /* for Base64 data, we use big endian byte ordering */
+                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue(EBO_BigEndian));
                 OFStandard::encodeBase64(out, byteValues, OFstatic_cast(size_t, getLengthField()));
             } else {
                 if ((evr == EVR_OW) || (evr == EVR_lt))
@@ -837,8 +838,8 @@ OFCondition DcmOtherByteOtherWord::writeXML(STD_NAMESPACE ostream &out,
         /* XML end tag: </element> */
         writeXMLEndTag(out, flags);
     }
-    /* always report success */
-    return EC_Normal;
+
+    return l_error;
 }
 
 

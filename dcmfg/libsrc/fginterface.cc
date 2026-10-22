@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -24,7 +24,7 @@
 #include "dcmtk/dcmfg/fg.h"
 #include "dcmtk/dcmfg/fgfact.h" // for creating new functional groups
 #include "dcmtk/dcmfg/fginterface.h"
-#include "dcmtk/ofstd/ofmap.h"
+#include "dcmtk/ofstd/ofvector.h"
 #include "dcmtk/ofstd/ofthread.h"
 #include "dcmtk/ofstd/ofmem.h"
 #include "dcmtk/dcmdata/dcdeftag.h"
@@ -221,12 +221,9 @@ void FGInterface::ThreadedFGReader::run()
             m_errorMutex->unlock();
             return;
         }
-        // Lock the mutex before modifying shared data
-        m_frameResultGroupsMutex->lock();
-        // cast is safe since we check earlier that it is not
-        // larger than DcmFGTypes::DCMFG_MAX_FRAMES (2^32-1)
-        m_frameResultGroups->insert(OFMake_pair(frameNo, groupsOneFrame.release()));
-        m_frameResultGroupsMutex->unlock();
+        // Each thread writes to its own non-overlapping range, so no lock needed.
+        // Range boundaries [m_startFrame, m_endFrame) are fixed for each thread and never change.
+        (*m_frameResultGroups)[frameNo] = groupsOneFrame.release();
         DCMFG_DEBUG("Finished reading functional groups for frame #" << frameNo);
     }
 }
@@ -251,13 +248,11 @@ FGInterface::~FGInterface()
 void FGInterface::clear()
 {
     // Clear per frame functional groups
-    while (m_perFrame.size() > 0)
+    for (size_t i = 0; i < m_perFrame.size(); ++i)
     {
-        OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.begin();
-        FunctionalGroups* fg                          = (*it).second;
-        m_perFrame.erase(it);
-        delete fg;
+        delete m_perFrame[i];
     }
+    m_perFrame.clear();
 
     // Clear shared functional groups
     m_shared.clear();
@@ -363,14 +358,9 @@ FGBase* FGInterface::get(const Uint32 frameNo, const DcmFGTypes::E_FGType fgType
 
 const FunctionalGroups* FGInterface::getPerFrame(const Uint32 frameNo) const
 {
-    if (frameNo > m_perFrame.size())
-    {
+    if (frameNo >= m_perFrame.size())
         return NULL;
-    }
-    else
-    {
-        return (*(m_perFrame.find(frameNo))).second;
-    }
+    return m_perFrame[frameNo];
 }
 
 const FunctionalGroups* FGInterface::getShared() const
@@ -474,32 +464,28 @@ OFCondition FGInterface::readPerFrameFGSequential(DcmSequenceOfItems& perFrameFG
 {
     /* Read functional groups for each item (one per frame) */
     OFCondition result;
+    m_perFrame.reserve(perFrameFGSeq.card());
     DcmItem* oneFrameItem = OFstatic_cast(DcmItem*, perFrameFGSeq.nextInContainer(NULL));
     Uint32 count          = 0;
     while (oneFrameItem != NULL)
     {
         OFunique_ptr<FunctionalGroups> perFrameGroups(new FunctionalGroups());
-        if (!oneFrameItem)
-        {
-            DCMFG_ERROR("Could not get functional group item for frame #" << count << " (internal error)");
-        }
-        else if (!perFrameGroups.get())
+        if (!perFrameGroups.get())
         {
             DCMFG_ERROR("Could not create functional groups for frame #" << count << ": Memory exhausted?");
+            m_perFrame.push_back(NULL);
         }
         else
         {
             result = readSingleFG(*oneFrameItem, *perFrameGroups);
             if (result.good())
             {
-                if (!m_perFrame.insert(OFMake_pair(count, perFrameGroups.release())).second)
-                {
-                    DCMFG_ERROR("Could not store functional groups for frame #" << count << " (internal error)");
-                }
+                m_perFrame.push_back(perFrameGroups.release());
             }
             else
             {
                 DCMFG_ERROR("Could not read functional groups for frame #" << count << ": " << result.text());
+                m_perFrame.push_back(NULL);
             }
         }
         oneFrameItem = OFstatic_cast(DcmItem*, perFrameFGSeq.nextInContainer(oneFrameItem));
@@ -516,9 +502,9 @@ OFCondition FGInterface::readPerFrameFGParallel(DcmSequenceOfItems& perFrameFGSe
     OFCondition result;
     size_t numFrames   = perFrameFGSeq.card();
 
-    // Create a vector to hold the functional groups for each frame and protect it with a mutex
+    // Pre-size the result vector so threads can write to non-overlapping indices
+    m_perFrame.resize(numFrames, NULL);
     PerFrameGroups& perFrameResultGroups = m_perFrame;
-    OFMutex perFrameResultGroupsMutex;
 
     // Create a vector to hold the results of all threads, protected by a mutex
     OFMutex perFrameInputMutex;
@@ -550,7 +536,7 @@ OFCondition FGInterface::readPerFrameFGParallel(DcmSequenceOfItems& perFrameFGSe
         Uint32 endFrame = (startFrame + framesPerThread < numFrames) ? startFrame + framesPerThread : OFstatic_cast(Uint32, numFrames);
 
         threads[i]->init(&perFrameInputItems, &perFrameInputMutex,
-                         &perFrameResultGroups, &perFrameResultGroupsMutex,
+                         &perFrameResultGroups, OFnullptr,
                          startFrame,
                          endFrame,
                          &errorMutex, &errorOccurred, this);
@@ -576,7 +562,6 @@ OFCondition FGInterface::readPerFrameFGParallel(DcmSequenceOfItems& perFrameFGSe
         return errorOccurred;
     }
 
-    // Store the results in m_perFrame
     return EC_Normal;
 }
 
@@ -597,14 +582,14 @@ OFCondition FGInterface::readSingleFG(DcmItem& fgItem, FunctionalGroups& groups)
         }
         else
         {
+            OFStringStream stream;
+            stream << DcmFGTypes::tagKey2FGString(elem->getTag()) << " " << elem->getTag();
+            OFSTRINGSTREAM_GETSTR(stream, tmpstr)
+            fgname = tmpstr;
+            OFSTRINGSTREAM_FREESTR(tmpstr)
             FGBase* fg = FGFactory::instance().create(elem->getTag());
             if (fg != NULL)
             {
-                OFStringStream stream;
-                stream << DcmFGTypes::tagKey2FGString(elem->getTag()) << " " << elem->getTag();
-                OFSTRINGSTREAM_GETSTR(stream, tmpstr)
-                fgname = tmpstr;
-                OFSTRINGSTREAM_FREESTR(tmpstr)
                 result = fg->read(fgItem);
                 if (result.bad())
                 {
@@ -665,15 +650,9 @@ OFCondition FGInterface::insertShared(FGBase* group, const OFBool replaceExistin
 
 FGBase* FGInterface::getPerFrame(const Uint32 frameNo, const DcmFGTypes::E_FGType fgType)
 {
-    FGBase* group                                 = NULL;
-    OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.find(frameNo);
-    if (it != m_perFrame.end())
-    {
-        FunctionalGroups* perFrameGroups = (*it).second;
-        group                            = perFrameGroups->find(fgType);
-    }
-
-    return group;
+    if (frameNo >= m_perFrame.size() || m_perFrame[frameNo] == NULL)
+        return NULL;
+    return m_perFrame[frameNo]->find(fgType);
 }
 
 OFBool FGInterface::deleteShared(const DcmFGTypes::E_FGType fgType)
@@ -689,20 +668,14 @@ OFBool FGInterface::deleteShared(const DcmFGTypes::E_FGType fgType)
 
 OFBool FGInterface::deletePerFrame(const Uint32 frameNo, const DcmFGTypes::E_FGType fgType)
 {
-    OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.find(frameNo);
-    if (it != m_perFrame.end())
+    if (frameNo >= m_perFrame.size() || m_perFrame[frameNo] == NULL)
+        return OFFalse;
+    FGBase* remove = m_perFrame[frameNo]->remove(fgType);
+    if (remove)
     {
-        if ((*it).second)
-        {
-            FGBase* remove = (*it).second->remove(fgType);
-            if (remove)
-            {
-                DCMFG_DEBUG("Deleting FG for frame " << frameNo << ", type: " << DcmFGTypes::FGType2OFString(fgType));
-                delete remove;
-                remove = NULL;
-                return OFTrue;
-            }
-        }
+        DCMFG_DEBUG("Deleting FG for frame " << frameNo << ", type: " << DcmFGTypes::FGType2OFString(fgType));
+        delete remove;
+        return OFTrue;
     }
     return OFFalse;
 }
@@ -723,21 +696,13 @@ size_t FGInterface::deletePerFrame(const DcmFGTypes::E_FGType fgType)
 
 size_t FGInterface::deleteFrame(const Uint32 frameNo)
 {
-    OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.find(frameNo);
-    if (it != m_perFrame.end())
-    {
-        if ((*it).second)
-        {
-            FunctionalGroups::iterator fg = (*it).second->begin();
-            while (fg != (*it).second->end())
-            {
-                delete (*fg).second;
-                fg++;
-            }
-        }
-        m_perFrame.erase(it);
-    }
-    return OFFalse;
+    if (frameNo >= m_perFrame.size() || m_perFrame[frameNo] == NULL)
+        return 0;
+    size_t count = m_perFrame[frameNo]->size();
+    // ~FunctionalGroups() calls clear() which deletes all FGBase* entries
+    delete m_perFrame[frameNo];
+    m_perFrame[frameNo] = NULL;
+    return count;
 }
 
 void FGInterface::setCheckOnWrite(const OFBool doCheck)
@@ -769,20 +734,17 @@ Uint32 FGInterface::getUseThreads() const
 
 FunctionalGroups* FGInterface::getOrCreatePerFrameGroups(const Uint32 frameNo)
 {
-    OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.find(frameNo);
-    if (it != m_perFrame.end())
-        return (*it).second;
+    // Resize vector if necessary to accommodate the frame number
+    if (frameNo >= m_perFrame.size())
+        m_perFrame.resize(frameNo + 1, NULL);
+
+    if (m_perFrame[frameNo] != NULL)
+        return m_perFrame[frameNo];
 
     FunctionalGroups* fg = new FunctionalGroups();
     if (fg != NULL)
     {
-        if (!(m_perFrame.insert(OFMake_pair(frameNo, fg))).second)
-        {
-            DCMFG_ERROR("Could not insert Per-frame Functional Groups for frame " << frameNo << ": "
-                                                                                  << "Internal error");
-            delete fg;
-            fg = NULL;
-        }
+        m_perFrame[frameNo] = fg;
     }
     else
     {
@@ -843,18 +805,20 @@ OFCondition FGInterface::writePerFrameFGSequential(DcmItem& dataset)
     }
 
     /* Iterate over frames */
-    OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.begin();
-    size_t numFrames                              = m_perFrame.size();
+    size_t numFrames = m_perFrame.size();
+    long itemIndex = 0;
     for (size_t count = 0; (count < numFrames) && result.good(); count++)
     {
+        if (m_perFrame[count] == NULL)
+            continue;
         DcmItem* perFrameItem = NULL;
         result                = dataset.findOrCreateSequenceItem(
-            DCM_PerFrameFunctionalGroupsSequence, perFrameItem, OFstatic_cast(long, count));
+            DCM_PerFrameFunctionalGroupsSequence, perFrameItem, itemIndex++);
         if (result.good())
         {
             /* Iterate over groups for each frame */
-            FunctionalGroups::iterator groupIt = (*it).second->begin();
-            while (result.good() && (groupIt != (*it).second->end()))
+            FunctionalGroups::iterator groupIt = m_perFrame[count]->begin();
+            while (result.good() && (groupIt != m_perFrame[count]->end()))
             {
                 DCMFG_DEBUG("Writing per-frame group: " << DcmFGTypes::FGType2OFString((*groupIt).second->getType())
                                                         << " for frame #" << count);
@@ -866,7 +830,6 @@ OFCondition FGInterface::writePerFrameFGSequential(DcmItem& dataset)
         {
             DCMFG_ERROR("Cannot create item in Per-frame Functional Groups Sequence");
         }
-        it++;
     }
     return result;
 }
@@ -885,9 +848,10 @@ OFCondition FGInterface::writePerFrameFGParallel(DcmItem& dataset, const Uint32 
     // being used in the other threads.
     OFVector<OFPair<Uint32, FunctionalGroups*> > frameGroups;
     frameGroups.reserve(m_perFrame.size());
-    for (OFMap<Uint32, FunctionalGroups*>::iterator it = m_perFrame.begin(); it != m_perFrame.end(); ++it)
+    for (size_t i = 0; i < m_perFrame.size(); ++i)
     {
-        frameGroups.push_back(OFMake_pair((*it).first, (*it).second));
+        if (m_perFrame[i] != NULL)
+            frameGroups.push_back(OFMake_pair(OFstatic_cast(Uint32, i), m_perFrame[i]));
     }
     // We check earlier that number of frames is not larger than max allowed
     Uint32 numFrames = OFstatic_cast(Uint32, frameGroups.size());
@@ -1046,6 +1010,7 @@ OFCondition FGInterface::convertSharedToPerFrame(const DcmFGTypes::E_FGType fgTy
             }
         }
     }
+    delete shared;
     return result;
 }
 
@@ -1107,40 +1072,39 @@ OFBool FGInterface::check()
     for (size_t frameCount = 0; frameCount < numFrames; frameCount++)
     {
         DCMFG_TRACE("Checking frame " << frameCount << "...");
-        // Most IODS require the FrameContent functional group, check "en passant"
-        OFBool foundFrameContent                           = OFFalse;
-        OFMap<Uint32, FunctionalGroups*>::iterator frameFG = m_perFrame.begin();
-        OFMap<Uint32, FunctionalGroups*>::iterator end     = m_perFrame.end();
-        while (frameFG != end)
+        if (m_perFrame[frameCount] == NULL)
         {
-            FunctionalGroups::iterator group    = (*frameFG).second->begin();
-            FunctionalGroups::iterator groupEnd = (*frameFG).second->end();
-            while (group != groupEnd)
+            DCMFG_WARN("Frame Content Functional group missing for frame #" << frameCount);
+            continue;
+        }
+        // Most IODS require the FrameContent functional group, check "en passant"
+        OFBool foundFrameContent                = OFFalse;
+        FunctionalGroups::iterator group    = m_perFrame[frameCount]->begin();
+        FunctionalGroups::iterator groupEnd = m_perFrame[frameCount]->end();
+        while (group != groupEnd)
+        {
+            // Check that per-frame group is not a shared group at the same time
+            DcmFGTypes::E_FGType groupType = group->second->getType();
+            if ((groupType != DcmFGTypes::EFG_UNDEFINED) && (groupType != DcmFGTypes::EFG_UNKNOWN))
             {
-                // Check that per-frame group is not a shared group at the same time
-                DcmFGTypes::E_FGType groupType = group->second->getType();
-                if ((groupType != DcmFGTypes::EFG_UNDEFINED) && (groupType != DcmFGTypes::EFG_UNKNOWN))
-                {
-                    if (m_shared.find(groupType) != NULL)
-                    {
-                        DCMFG_ERROR("Functional group of type " << DcmFGTypes::FGType2OFString(groupType)
-                                                                << " is shared AND per-frame for frame " << frameCount);
-                        numErrors++;
-                    }
-                    if (groupType == DcmFGTypes::EFG_FRAMECONTENT)
-                        foundFrameContent = OFTrue;
-                }
-                // Check if "per-frame" is allowed for this group;
-                if (group->second->getSharedType() == DcmFGTypes::EFGS_ONLYSHARED)
+                if (m_shared.find(groupType) != NULL)
                 {
                     DCMFG_ERROR("Functional group of type " << DcmFGTypes::FGType2OFString(groupType)
-                                                            << " can never be per-frame, but found for frame "
-                                                            << frameCount);
+                                                            << " is shared AND per-frame for frame " << frameCount);
                     numErrors++;
                 }
-                group++;
+                if (groupType == DcmFGTypes::EFG_FRAMECONTENT)
+                    foundFrameContent = OFTrue;
             }
-            frameFG++;
+            // Check if "per-frame" is allowed for this group;
+            if (group->second->getSharedType() == DcmFGTypes::EFGS_ONLYSHARED)
+            {
+                DCMFG_ERROR("Functional group of type " << DcmFGTypes::FGType2OFString(groupType)
+                                                        << " can never be per-frame, but found for frame "
+                                                        << frameCount);
+                numErrors++;
+            }
+            group++;
         }
         if (!foundFrameContent)
         {

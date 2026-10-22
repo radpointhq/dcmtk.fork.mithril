@@ -4,7 +4,7 @@
 **
 **   User: joergr
 **   Host: thinkpad2
-**   Date: 2025-11-21 11:54:35
+**   Date: 2026-09-21 14:16:30
 **   Prog: /home/joergr/Source/dcmtk-full/public/dcmdata/libsrc/mkdictbi
 **
 **   From: ../data/dicom.dic
@@ -490,6 +490,10 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       NULL }
   , { 0x0008, 0x001c, 0x0008, 0x001c,
       EVR_CS, "SyntheticData", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x0008, 0x001d, 0x0008, 0x001d,
+      EVR_SQ, "SensitiveContentCodeSequence", 1, 1, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       NULL }
   , { 0x0008, 0x0020, 0x0008, 0x0020,
@@ -7646,6 +7650,18 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       EVR_DS, "XRayMassAttenuationCoefficient", 1, 1, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       NULL }
+  , { 0x0018, 0x9390, 0x0018, 0x9390,
+      EVR_SQ, "MetalArtifactReductionSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x0018, 0x9391, 0x0018, 0x9391,
+      EVR_CS, "MetalArtifactReductionApplied", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x0018, 0x9392, 0x0018, 0x9392,
+      EVR_SQ, "MetalArtifactReductionAlgorithmIdentificationSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
   , { 0x0018, 0x9401, 0x0018, 0x9401,
       EVR_SQ, "ProjectionPixelCalibrationSequence", 1, 1, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
@@ -11076,7 +11092,7 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "SPI-P Release 1" }
   , { 0x0019, 0x0081, 0x0019, 0x0081,
-      EVR_IS, "ObjectPosition", 1, 1, "PrivateTag",
+      EVR_ST, "ObjectPosition", 1, 1, "PrivateTag",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "SVISION" }
   , { 0x0019, 0x0081, 0x0019, 0x0081,
@@ -17632,7 +17648,7 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "SPI-P Release 1;3" }
   , { 0x0029, 0x0002, 0x0029, 0x0002,
-      EVR_DS, "ConvolutionKernelCoefficients", 1, -1, "PrivateTag",
+      EVR_US, "ConvolutionKernelCoefficients", 1, -1, "PrivateTag",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "CARDIO-D.R. 1.0" }
   , { 0x0029, 0x0002, 0x0029, 0x0002,
@@ -17652,7 +17668,7 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "SPI-P Release 1;3" }
   , { 0x0029, 0x0003, 0x0029, 0x0003,
-      EVR_DS, "EdgeEnhancementGain", 1, 1, "PrivateTag",
+      EVR_FL, "EdgeEnhancementGain", 1, 1, "PrivateTag",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "CARDIO-D.R. 1.0" }
   , { 0x0029, 0x0003, 0x0029, 0x0003,
@@ -21068,6 +21084,10 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       NULL }
   , { 0x0040, 0xe011, 0x0040, 0xe011,
       EVR_UI, "RetrieveLocationUID", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x0040, 0xe012, 0x0040, 0xe012,
+      EVR_UR, "DisplayURI", 1, 1, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       NULL }
   , { 0x0040, 0xe020, 0x0040, 0xe020,
@@ -26793,6 +26813,10 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       EVR_SS, "NumberOfStackSlices", 1, 1, "PrivateTag",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       "PHILIPS MR IMAGING DD 001" }
+  , { 0x2005, 0x0045, 0x2005, 0x0045,
+      EVR_CS, "AttenuationCorrection", 1, 1, "PrivateTag",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      "Philips MR Imaging DD 005" }
   , { 0x2005, 0x0083, 0x2005, 0x0083,
       EVR_SQ, "Unknown", 1, 1, "PrivateTag",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
@@ -27596,6 +27620,26 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       EVR_SQ, "RecommendedIsodoseLevelSequence", 1, 1, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       NULL }
+  , { 0x3004, 0x0020, 0x3004, 0x0020,
+      EVR_SQ, "DoseUnitCodeSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x3004, 0x0021, 0x3004, 0x0021,
+      EVR_SQ, "RTDoseInterpretedTypeCodeSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x3004, 0x0022, 0x3004, 0x0022,
+      EVR_SQ, "RTDoseInterpretedTypeCodeModifierSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x3004, 0x0023, 0x3004, 0x0023,
+      EVR_SQ, "DoseRadiobiologicalInterpretationSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x3004, 0x0024, 0x3004, 0x0024,
+      EVR_SQ, "RTDoseIntentCodeSequence", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
   , { 0x3004, 0x0040, 0x3004, 0x0040,
       EVR_DS, "DVHNormalizationPoint", 3, 3, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
@@ -27642,6 +27686,10 @@ static const DBI_SimpleEntry simpleBuiltinDict[] = {
       NULL }
   , { 0x3004, 0x0074, 0x3004, 0x0074,
       EVR_DS, "DVHMeanDose", 1, 1, "DICOM",
+      DcmDictRange_Unspecified, DcmDictRange_Unspecified,
+      NULL }
+  , { 0x3004, 0x007f, 0x3004, 0x007f,
+      EVR_LO, "DoseCalculationModelName", 1, 1, "DICOM",
       DcmDictRange_Unspecified, DcmDictRange_Unspecified,
       NULL }
   , { 0x3004, 0x0080, 0x3004, 0x0080,

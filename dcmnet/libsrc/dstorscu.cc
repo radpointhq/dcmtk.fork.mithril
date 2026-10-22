@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2011-2024, OFFIS e.V.
+ *  Copyright (C) 2011-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -26,6 +26,7 @@
 #include "dcmtk/dcmdata/dccodec.h"
 #include "dcmtk/dcmdata/dcfilefo.h"
 #include "dcmtk/dcmdata/dcdatutl.h"
+#include "dcmtk/dcmdata/dcddirif.h"   /* for DicomDirInterface */
 #include "dcmtk/dcmnet/dstorscu.h"
 #include "dcmtk/dcmnet/diutil.h"
 #include "dcmtk/ofstd/ofstdinc.h"
@@ -510,6 +511,14 @@ OFCondition DcmStorageSCU::addDicomFilesFromDICOMDIR(const OFFilename &filename,
                     }
                     // finally, try to add this information to the transfer list
                     status = checkSOPInstance(sopClassUID, sopInstanceUID, transferSyntaxUID, checkValues);
+                    // reject Referenced File IDs that would escape the DICOMDIR directory
+                    // (path traversal via a ".." component or an absolute path), see SYSS-2026-047
+                    if (status.good() && !DicomDirInterface::isReferencedFileIDSafe(fileID))
+                    {
+                        DCMNET_ERROR("cannot add DICOM file from DICOMDIR: unsafe Referenced File ID '"
+                            << fileID << "' (possible path traversal)");
+                        status = EC_InvalidFilename;
+                    }
                     if (status.good())
                     {
                         OFString tmpString;

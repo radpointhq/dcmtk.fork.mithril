@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, J. Riesmeier, Oldenburg, Germany
+ *  Copyright (C) 2015-2026, J. Riesmeier, Oldenburg, Germany
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -176,12 +176,14 @@ class DCMTK_DCMSR_EXPORT DSRIncludedTemplateTreeNode
      *  @param  cursor        dummy parameter
      *  @param  documentType  dummy parameter
      *  @param  flags         dummy parameter
+     *  @param  depth         dummy parameter
      ** @return always returns SR_EC_CannotProcessIncludedTemplates
      */
     virtual OFCondition readXML(const DSRXMLDocument &doc,
                                 DSRXMLCursor cursor,
                                 const E_DocumentType documentType,
-                                const size_t flags);
+                                const size_t flags,
+                                const size_t depth = 0);
 
     /** render content item in HTML/XHTML format
      ** @param  docStream     dummy parameter

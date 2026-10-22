@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1996-2019, OFFIS e.V.
+ *  Copyright (C) 1996-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -25,6 +25,7 @@
 
 #include "dcmtk/config/osconfig.h"
 #include "dcmtk/dcmnet/dimse.h"
+#include "dcmtk/dcmtls/tlsopt.h"
 
 class WlmDataSource;
 class OFConsoleApplication;
@@ -80,6 +81,8 @@ class WlmConsoleEngineFileSystem
     OFBool opt_noSequenceExpansion;
     /// indicates if wl-files which are lacking return type 1 attributes or information in such attributes shall be rejected or not
     OFBool opt_enableRejectionOfIncompleteWlFiles;
+    /// indicates if arbitrary (non-sequence) attributes on the main level of the search mask shall be accepted as return keys
+    OFBool opt_enableAllReturnKeys;
     /// blocking mode for DIMSE operations
     T_DIMSE_BlockingMode opt_blockMode;
     /// timeout for DIMSE operations
@@ -96,6 +99,8 @@ class WlmConsoleEngineFileSystem
     char **command_argv;
     /// data source which shall be queried on incoming C-Find RQ messages
     WlmDataSource *dataSource;
+    /// TLS options for the TCP connection
+    DcmTLSOptions tlsOptions;
 
       /** Protected undefined copy-constructor. Shall never be called.
        *  @param Src Source object.

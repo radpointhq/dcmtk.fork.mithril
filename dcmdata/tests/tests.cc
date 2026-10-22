@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2011-2025 OFFIS e.V.
+ *  Copyright (C) 2011-2026 OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -25,6 +25,7 @@
 
 OFTEST_REGISTER(dcmdata_partialElementAccess);
 OFTEST_REGISTER(dcmdata_i2d_bmp);
+OFTEST_REGISTER(dcmdata_referencedFileIDSafety);
 OFTEST_REGISTER(dcmdata_checkStringValue);
 OFTEST_REGISTER(dcmdata_determineVM);
 OFTEST_REGISTER(dcmdata_getValueFromString);
@@ -84,7 +85,7 @@ OFTEST_REGISTER(dcmdata_elementLength_EVR_UR);
 OFTEST_REGISTER(dcmdata_elementLength_EVR_US);
 OFTEST_REGISTER(dcmdata_elementLength_EVR_UV);
 OFTEST_REGISTER(dcmdata_elementLength_EVR_UT);
-OFTEST_REGISTER(dcmdata_elementLength_EVR_lt);
+OFTEST_REGISTER(dcmdata_elementLength_EVR_lt_);
 OFTEST_REGISTER(dcmdata_elementLength_EVR_na);
 OFTEST_REGISTER(dcmdata_elementLength_EVR_ox);
 OFTEST_REGISTER(dcmdata_elementLength_EVR_px);
@@ -127,5 +128,39 @@ OFTEST_REGISTER(dcmdata_xferLookup_3);
 OFTEST_REGISTER(dcmdata_xferLookup_4);
 OFTEST_REGISTER(dcmdata_putOFStringAtPos);
 OFTEST_REGISTER(dcmdata_uncompressedFrameSize);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_exceeded);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_atLimit);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_wellBelow);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_customLimit);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_disabled);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_datasetAPI);
+OFTEST_REGISTER(dcmdata_nestingDepthLimit_fileFormatAPI);
+OFTEST_REGISTER(dcmdata_condition_existence);
+OFTEST_REGISTER(dcmdata_condition_US);
+OFTEST_REGISTER(dcmdata_condition_SS);
+OFTEST_REGISTER(dcmdata_condition_UL);
+OFTEST_REGISTER(dcmdata_condition_SL);
+OFTEST_REGISTER(dcmdata_condition_UV);
+OFTEST_REGISTER(dcmdata_condition_SV);
+OFTEST_REGISTER(dcmdata_condition_FL);
+OFTEST_REGISTER(dcmdata_condition_FD);
+OFTEST_REGISTER(dcmdata_condition_OB);
+OFTEST_REGISTER(dcmdata_condition_OW);
+OFTEST_REGISTER(dcmdata_condition_OL);
+OFTEST_REGISTER(dcmdata_condition_OV);
+OFTEST_REGISTER(dcmdata_condition_OF);
+OFTEST_REGISTER(dcmdata_condition_OD);
+OFTEST_REGISTER(dcmdata_condition_UN);
+OFTEST_REGISTER(dcmdata_condition_IS);
+OFTEST_REGISTER(dcmdata_condition_DS);
+OFTEST_REGISTER(dcmdata_condition_CS);
+OFTEST_REGISTER(dcmdata_condition_LO);
+OFTEST_REGISTER(dcmdata_condition_PN);
+OFTEST_REGISTER(dcmdata_condition_DA);
+OFTEST_REGISTER(dcmdata_condition_UI);
+OFTEST_REGISTER(dcmdata_condition_AT);
+OFTEST_REGISTER(dcmdata_condition_VM);
+OFTEST_REGISTER(dcmdata_condition_sequence_wildcard);
+OFTEST_REGISTER(dcmdata_condition_tagname);
 
 OFTEST_MAIN("dcmdata")

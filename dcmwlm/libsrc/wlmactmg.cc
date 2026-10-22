@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1996-2024, OFFIS e.V.
+ *  Copyright (C) 1996-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -99,6 +99,7 @@ static void storeRequestToFile(DcmDataset& request, const OFString& callingAE, c
 
 WlmActivityManager::WlmActivityManager(
     WlmDataSource *dataSourcev,
+    DcmTransportLayer *transportLayerv,
     OFCmdUnsignedInt opt_portv,
     OFBool opt_refuseAssociationv,
     OFBool opt_rejectWithoutImplementationUIDv,
@@ -120,6 +121,7 @@ WlmActivityManager::WlmActivityManager(
 // Author       : Thomas Wilkens
 // Task         : Constructor.
 // Parameters   : dataSourcev                         - [in] Pointer to the data source which shall be used.
+//                transportLayer                      - [in] Pointer to the transport layer which shall be used.
 //                opt_portv                           - [in] The port on which the application is supposed to listen.
 //                opt_refuseAssociationv              - [in] Specifies if an association shall always be refused by the SCP.
 //                opt_rejectWithoutImplementationUIDv - [in] Specifies if the application shall reject an association if no implementation class UID is provided by the calling SCU.
@@ -135,7 +137,7 @@ WlmActivityManager::WlmActivityManager(
 //                argcv                               - [in] Number of arguments in command line
 //                argvv                               - [in/out] Holds complete commandline
 // Return Value : none.
-  : dataSource( dataSourcev ), opt_port( opt_portv ), opt_refuseAssociation( opt_refuseAssociationv ),
+  : dataSource( dataSourcev ), transportLayer ( transportLayerv ), opt_port( opt_portv ), opt_refuseAssociation( opt_refuseAssociationv ),
     opt_rejectWithoutImplementationUID( opt_rejectWithoutImplementationUIDv ), opt_sleepBeforeFindReq( opt_sleepBeforeFindReqv ),
     opt_sleepAfterFind( opt_sleepAfterFindv ), opt_sleepDuringFind( opt_sleepDuringFindv ),
     opt_maxPDU( opt_maxPDUv ), opt_networkTransferSyntax( opt_networkTransferSyntaxv ),
@@ -144,7 +146,8 @@ WlmActivityManager::WlmActivityManager(
     cmd_argv( argvv ), opt_maxAssociations( opt_maxAssociationsv ),
     opt_blockMode(opt_blockModev), opt_dimse_timeout(opt_dimse_timeoutv), opt_acse_timeout(opt_acse_timeoutv),
     supportedAbstractSyntaxes( NULL ), numberOfSupportedAbstractSyntaxes( 0 ),
-    processTable( )
+    processTable( ), opt_requestFilePath(), opt_requestFileFormat(), stopRequested(OFFalse), stopRequestedMutex(),
+    connectionTimeout(60)
 {
   // initialize supported abstract transfer syntaxes.
   supportedAbstractSyntaxes = new char*[2];
@@ -214,6 +217,22 @@ OFBool WlmActivityManager::setRequestFilePath(const OFString& path, const OFStri
 }
 
 
+void WlmActivityManager::SetConnectionTimeout(int seconds)
+// Date         : Feb 05, 2026
+// Author       : Michael Onken
+// Task         : Set connection timeout in seconds. If this timeout is > 0, the application will
+//                stop waiting for a client connection after the specified time has elapsed and check
+//                whether a stop was requested (see RequestStop()). If the timeout is 0,
+//                the application will wait indefinitely for a client connection.
+// Parameters   : seconds - [in] The connection timeout in seconds. If set to 0, the
+//                          application will wait indefinitely for a client connection.
+//                          The default value is 60 seconds.
+// Return Value : none.
+{
+    connectionTimeout = seconds;
+}
+
+
 // ----------------------------------------------------------------------------
 
 OFCondition WlmActivityManager::StartProvidingService()
@@ -261,6 +280,12 @@ OFCondition WlmActivityManager::StartProvidingService()
   cond = ASC_initializeNetwork( NET_ACCEPTOR, OFstatic_cast(int, opt_port), opt_acse_timeout, &net );
   if( cond.bad() ) return( WLM_EC_InitializationOfNetworkConnectionFailed );
 
+  if (transportLayer)
+  {
+      cond = ASC_setTransportLayer( net, transportLayer, 0 /* Do not take over ownership */ );
+      if( cond.bad() ) return cond;
+  }
+
   /* drop root privileges now and revert to the calling user id (if we are running as setuid root) */
   cond = OFStandard::dropPrivileges();
   if (cond.bad())
@@ -273,7 +298,8 @@ OFCondition WlmActivityManager::StartProvidingService()
   // successfully. Now, we want to start handling all incoming requests. Since
   // this activity is supposed to represent a server process, we do not want to
   // terminate this activity. Hence, create an endless while-loop.
-  while( cond.good() )
+  OFBool userRequestedStop = OFFalse;
+  while( cond.good() && !userRequestedStop)
   {
     // Wait for an association and handle the requests of
     // the calling applications correspondingly.
@@ -290,6 +316,14 @@ OFCondition WlmActivityManager::StartProvidingService()
     // for unix, this is done in WaitForAssociation() with exit()
     if (DUL_processIsForkedChild()) break;
 #endif
+    // check if stop was requested
+    stopRequestedMutex.lock();
+    userRequestedStop = stopRequested;
+    if (userRequestedStop)
+    {
+      DCMWLM_DEBUG("WlmActivityManager: Detected stop request, terminating service loop");
+    }
+    stopRequestedMutex.unlock();
   }
   // Drop the network, i.e. free memory of T_ASC_Network* structure. This call
   // is the counterpart of ASC_initializeNetwork(...) which was called above.
@@ -385,31 +419,43 @@ OFCondition WlmActivityManager::WaitForAssociation( T_ASC_Network * net )
   // or not we need to set the timeout value correspondingly.
   // for WIN32, child processes cannot be counted (always 0) -> timeout=1000
   if( opt_singleProcess )
-    timeout = 1000;
+    timeout = connectionTimeout;
   else
   {
     if( processTable.size() > 0 )
       timeout = 1;
     else
-      timeout = 1000;
+      timeout = connectionTimeout;
   }
 
   // Listen to a socket for timeout seconds and wait for an association request.
-  OFCondition cond = ASC_receiveAssociation( net, &assoc, opt_maxPDU, NULL, NULL, OFFalse, DUL_NOBLOCK, timeout );
+  OFBool useSecureLayer = transportLayer ? OFTrue : OFFalse;
+  OFCondition cond = ASC_receiveAssociation( net, &assoc, opt_maxPDU, NULL, NULL, useSecureLayer, DUL_NOBLOCK, timeout );
 
-  // just return, if timeout occurred (DUL_NOASSOCIATIONREQUEST)
-  // or (WIN32) if dcmnet has started a child for us, to handle this
-  // association (signaled by "DULC_FORKEDCHILD") -> return to "event loop"
+  // if a timeout occurred (DUL_NOASSOCIATIONREQUEST)
+  // or (WIN32) if dcmnet has started a child that will handle this association
+  // (signaled by "DULC_FORKEDCHILD"), just return to the "event loop"
   if ( ( cond.code() == DULC_FORKEDCHILD ) || ( cond == DUL_NOASSOCIATIONREQUEST ) )
-    return EC_Normal;
-
-  // if error occurs and we're not in single process mode, close association and return
-  if( cond.bad() && !opt_singleProcess )
   {
+    if (cond == DUL_NOASSOCIATIONREQUEST)
+    {
+      ASC_dropAssociation( assoc );
+      ASC_destroyAssociation( &assoc );
+    }
+    return EC_Normal;
+  }
+
+  // if error has occured, close the association and return.
+  // Note that we return EC_Normal because we want to continue the event loop,
+  // i.e. wait for the next incoming association.
+  if( cond.bad() )
+  {
+    DCMWLM_ERROR("Receiving Association failed: " << cond.text());
     ASC_dropAssociation( assoc );
     ASC_destroyAssociation( &assoc );
     return EC_Normal;
   }
+
   // Dump some information if required
   DCMWLM_INFO("Association Received ("
     << assoc->params->DULparams.callingPresentationAddress
@@ -557,6 +603,10 @@ OFCondition WlmActivityManager::WaitForAssociation( T_ASC_Network * net )
     }
     else if( pid > 0 )
     {
+      // set the parent process mode in the association.
+      // This will prevent the TLS connection to be shutdown by ASC_dropAssociation().
+      ASC_setParentProcessMode(assoc);
+
       // Fork returns a positive process id if this is the parent process.
       // If this is the case, remember the process in a table and go ahead.
       AddProcessToTable( pid, assoc );
@@ -1041,6 +1091,15 @@ static OFString AddStatusDetail( DcmDataset **statusDetail, const DcmElement *el
   return ret;
 }
 
+
+void WlmActivityManager::RequestStop()
+{
+  DCMWLM_DEBUG("WlmActivityManager: Stop requested");
+  stopRequestedMutex.lock();
+  stopRequested = OFTrue;
+  stopRequestedMutex.unlock();
+}
+
 // ----------------------------------------------------------------------------
 
 static void FindCallback( void *callbackData, OFBool cancelled, T_DIMSE_C_FindRQ * /*request*/, DcmDataset *requestIdentifiers, int responseCount, T_DIMSE_C_FindRSP *response, DcmDataset **responseIdentifiers, DcmDataset **statusDetail )
@@ -1174,10 +1233,19 @@ static void FindCallback( void *callbackData, OFBool cancelled, T_DIMSE_C_FindRQ
 static void storeRequestToFile(DcmDataset& request, const OFString& callingAE, const OFString& calledAE, const OFString& reqFilePath, const OFString& reqFileFormat)
 {
   OFString fileName = reqFileFormat;
-  // Called Application Entity Title
-  OFStringUtil::replace_all(fileName, WLM_CALLED_AETITLE_PLACEHOLDER, calledAE);
-  // Calling Application Entity Title
-  OFStringUtil::replace_all(fileName, WLM_CALLING_AETITLE_PLACEHOLDER, callingAE);
+
+  // Each substituted value is sanitized before being inserted into the
+  // filename template. This prevents the calling/called AE title and the
+  // Patient ID (all originating on the wire) from injecting path
+  // separators or other unsafe characters into the resulting filename
+  // and thereby escaping the configured request file directory.
+  OFString safeCalledAE = calledAE;
+  OFStandard::sanitizeAETitle(safeCalledAE);
+  OFStringUtil::replace_all(fileName, WLM_CALLED_AETITLE_PLACEHOLDER, safeCalledAE);
+
+  OFString safeCallingAE = callingAE;
+  OFStandard::sanitizeAETitle(safeCallingAE);
+  OFStringUtil::replace_all(fileName, WLM_CALLING_AETITLE_PLACEHOLDER, safeCallingAE);
 
   // Process ID
   int processID = dcmtk::log4cplus::internal::get_process_id();
@@ -1199,7 +1267,14 @@ static void storeRequestToFile(DcmDataset& request, const OFString& callingAE, c
   // Patient ID goes last since it might contain placeholders again (".#x...)"
   OFString patientID;
   request.findAndGetOFStringArray(DCM_PatientID, patientID);
+  OFStandard::sanitizeAETitle(patientID);
   OFStringUtil::replace_all(fileName, WLM_PATIENT_ID_PLACEHOLDER, patientID);
+
+  // Defense in depth: also sanitize the fully assembled filename so that
+  // any path separator that survived (for example through interaction
+  // between placeholder substitutions or via the user-supplied format
+  // string itself) is replaced before the file is opened.
+  OFStandard::sanitizeAETitle(fileName);
 
   // Finally store file
   STD_NAMESPACE ofstream outputStream;

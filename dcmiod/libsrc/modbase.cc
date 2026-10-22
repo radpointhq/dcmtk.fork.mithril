@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -27,8 +27,10 @@
 
 IODComponent::IODComponent(const IODComponent& rhs)
     : m_Item(OFstatic_cast(DcmItem*, rhs.m_Item->clone()))
-    , m_Rules(rhs.m_Rules->clone())
+    , m_Rules(rhs.m_HasOwnRules ? OFshared_ptr<IODRules>(rhs.m_Rules->clone()) : rhs.m_Rules)
     , m_Parent(OFnullptr)
+    , m_HasOwnRules(rhs.m_HasOwnRules)
+    , m_ExternalRules(OFFalse)
     , m_CheckValueOnWrite(rhs.m_CheckValueOnWrite)
 {
 }
@@ -37,6 +39,8 @@ IODComponent::IODComponent(OFshared_ptr<DcmItem> item, OFshared_ptr<IODRules> ru
     : m_Item(item)
     , m_Rules(rules)
     , m_Parent(parent)
+    , m_HasOwnRules(OFTrue)
+    , m_ExternalRules(rules ? OFTrue : OFFalse)
     , m_CheckValueOnWrite(OFTrue)
 {
     if (!m_Item)
@@ -50,6 +54,8 @@ IODComponent::IODComponent(IODComponent* parent)
     : m_Item()
     , m_Rules()
     , m_Parent(parent)
+    , m_HasOwnRules(OFTrue)
+    , m_ExternalRules(OFFalse)
     , m_CheckValueOnWrite()
 {
     m_Item.reset(new DcmItem());
@@ -65,13 +71,33 @@ IODComponent::~IODComponent()
     // Nothing to do for shared pointers
 }
 
+OFshared_ptr<IODRules> IODComponent::getRules()
+{
+    ensureOwnRules();
+    return m_Rules;
+}
+
+void IODComponent::ensureOwnRules()
+{
+    if (!m_HasOwnRules)
+    {
+        m_Rules.reset(m_Rules->clone());
+        m_HasOwnRules = OFTrue;
+    }
+}
+
 IODComponent& IODComponent::operator=(const IODComponent& rhs)
 {
     if (&rhs != this)
     {
         m_Item.reset(OFstatic_cast(DcmItem*, rhs.m_Item->clone()));
-        m_Rules.reset(rhs.m_Rules->clone());
-        m_Parent = OFnullptr;
+        if (rhs.m_HasOwnRules)
+            m_Rules.reset(rhs.m_Rules->clone());
+        else
+            m_Rules = rhs.m_Rules;
+        m_HasOwnRules   = rhs.m_HasOwnRules;
+        m_ExternalRules = OFFalse;
+        m_Parent        = OFnullptr;
         m_CheckValueOnWrite = rhs.m_CheckValueOnWrite;
     }
     return *this;
@@ -125,6 +151,7 @@ void IODComponent::clearData()
 
 void IODComponent::makeOptional()
 {
+    ensureOwnRules();
     OFVector<IODRule*> modRules       = m_Rules->getByModule(getName());
     OFVector<IODRule*>::iterator rule = modRules.begin();
     while (rule != modRules.end())
@@ -277,9 +304,11 @@ IODModule& IODModule::operator=(const IODModule& rhs)
 {
     if (this != &rhs)
     {
-        m_Item   = rhs.m_Item;
-        m_Rules  = rhs.m_Rules;
-        m_Parent = rhs.m_Parent;
+        m_Item          = rhs.m_Item;
+        m_Rules         = rhs.m_Rules;
+        m_Parent        = rhs.m_Parent;
+        m_HasOwnRules   = rhs.m_HasOwnRules;
+        m_ExternalRules = rhs.m_ExternalRules;
     }
     return *this;
 }

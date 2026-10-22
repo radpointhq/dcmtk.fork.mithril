@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2024-2025, OFFIS e.V.
+ *  Copyright (C) 2024-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -153,7 +153,7 @@ extern char** environ; // required to exist by the Single Unix Specification
 #endif /* _WIN32 */
 
 
-int OFstub_main(int argc, char** argv, const char *stubName, const char *appName)
+int OFstub_main(int argc, char** argv, const char *stubName, const char *appName, OFBool printWarning, OFBool debug)
 {
     if ((argv==NULL) || (stubName==NULL) || (appName==NULL))
     {
@@ -161,43 +161,46 @@ int OFstub_main(int argc, char** argv, const char *stubName, const char *appName
       return EXITCODE_ILLEGAL_PARAMS;
     }
 
-    long len = 43 - OFstatic_cast(long, strlen(stubName)) - OFstatic_cast(long, strlen(appName));
-    if (len < 0) len = 0;
+    if (printWarning)
+    {
+        long len = 43 - OFstatic_cast(long, strlen(stubName)) - OFstatic_cast(long, strlen(appName));
+        if (len < 0) len = 0;
 
 #ifdef DCMTK_USE_OFLOG_LOGGER_IN_STUB
-    OFString logger_name = "dcmtk.apps.";
-    logger_name += stubName;
-    OFLogger logger = OFLog::getLogger(logger_name.c_str());
+        OFString logger_name = "dcmtk.apps.";
+        logger_name += stubName;
+        OFLogger logger = OFLog::getLogger(logger_name.c_str());
 
-    OFString output =
-        "##########################################################################\n"
-        "#                                                                        #\n#";
-    output.append(len/2, ' ');
-    output.append(stubName);
-    output.append(" is deprecated, use ");
-    output.append(appName);
-    output.append(" instead!");
-    output.append(len - (len/2), ' ');
-    output.append("#\n"
-        "#                                                                        #\n"
-        "##########################################################################\n");
-      OFLOG_WARN(logger, output);
+        OFString output =
+            "##########################################################################\n"
+            "#                                                                        #\n#";
+        output.append(len/2, ' ');
+        output.append(stubName);
+        output.append(" is deprecated, use ");
+        output.append(appName);
+        output.append(" instead!");
+        output.append(len - (len/2), ' ');
+        output.append("#\n"
+            "#                                                                        #\n"
+            "##########################################################################\n");
+          OFLOG_WARN(logger, output);
 #else
-    OFString output =
-        "W: ##########################################################################\n"
-        "W: #                                                                        #\nW: #";
-    output.append(len/2, ' ');
-    output.append(stubName);
-    output.append(" is deprecated, use ");
-    output.append(appName);
-    output.append(" instead!");
-    output.append(len - (len/2), ' ');
-    output.append("#\n"
-        "W: #                                                                        #\n"
-        "W: ##########################################################################\n\n");
+        OFString output =
+            "W: ##########################################################################\n"
+            "W: #                                                                        #\nW: #";
+        output.append(len/2, ' ');
+        output.append(stubName);
+        output.append(" is deprecated, use ");
+        output.append(appName);
+        output.append(" instead!");
+        output.append(len - (len/2), ' ');
+        output.append("#\n"
+            "W: #                                                                        #\n"
+            "W: ##########################################################################\n\n");
 
-    fprintf(stderr, "%s", output.c_str());
+        fprintf(stderr, "%s", output.c_str());
 #endif
+    } // if (printWarning)
 
     // get real path in which the stub executable is located
     int dirname_length = 0;
@@ -230,11 +233,21 @@ int OFstub_main(int argc, char** argv, const char *stubName, const char *appName
         newpath = "\"" + newpath + ".exe\"";
         else newpath += ".exe";
 
+    if (debug)
+    {
+#ifdef DCMTK_USE_OFLOG_LOGGER_IN_STUB
+      OFLOG_DEBUG(logger, "Executing: " << newpath);
+#else
+      fprintf(stderr, "D: Executing: %s \n", newpath.c_str());
+#endif
+    }
+
     if (argc > 1)
     {
         // add arguments to new command line
         newpath += " " + argvToCommandLine(argc-1, argv+1);
     }
+
 
     // prepare data for CreateProcessA
     STARTUPINFOA siStartInfo;
@@ -289,6 +302,15 @@ int OFstub_main(int argc, char** argv, const char *stubName, const char *appName
     return OFstatic_cast(int, exit_code);
 
 #else /* _WIN32 */
+
+    if (debug)
+    {
+#ifdef DCMTK_USE_OFLOG_LOGGER_IN_STUB
+      OFLOG_DEBUG(logger, "Executing: " << newpath);
+#else
+      fprintf(stderr, "D: Executing: %s \n", newpath.c_str());
+#endif
+    }
 
     // call the application for which we are a stub
     (void) execve(newpath.c_str(), argv, environ);

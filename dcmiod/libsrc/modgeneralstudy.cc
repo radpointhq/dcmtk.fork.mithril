@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -29,6 +29,19 @@
 #include "dcmtk/dcmdata/dcvrtm.h"
 #include "dcmtk/dcmdata/dcvrui.h"
 #include "dcmtk/dcmiod/iodutil.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+OFshared_ptr<IODRules> s_defaultRules;
+OFMutex s_defaultRulesMutex;
+}
 
 const OFString IODGeneralStudyModule::m_ModuleName = "GeneralStudyModule";
 
@@ -61,19 +74,37 @@ void IODGeneralStudyModule::inventMissing()
 
 void IODGeneralStudyModule::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_StudyInstanceUID, "1", "1", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_StudyDate, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_StudyTime, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ReferringPhysicianName, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_StudyID, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_AccessionNumber, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_StudyDescription, "1", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_IssuerOfAccessionNumberSequence, "1", "3", getName(), DcmIODTypes::IE_STUDY),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ProcedureCodeSequence, "1-n", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
-    m_Rules->addRule(
-        new IODRule(DCM_ReasonForPerformedProcedureCodeSequence, "1-n", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+    s_defaultRulesMutex.lock();
+    if (!s_defaultRules)
+    {
+        s_defaultRules.reset(new IODRules());
+        // parameters are tag, VM, type. Overwrite old rules if any.
+        s_defaultRules->addRule(new IODRule(DCM_StudyInstanceUID, "1", "1", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_StudyDate, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_StudyTime, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_ReferringPhysicianName, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_StudyID, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_AccessionNumber, "1", "2", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_StudyDescription, "1", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_IssuerOfAccessionNumberSequence, "1", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_ProcedureCodeSequence, "1-n", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_ReasonForPerformedProcedureCodeSequence, "1-n", "3", getName(), DcmIODTypes::IE_STUDY), OFTrue);
+    }
+    s_defaultRulesMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_defaultRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_defaultRules->begin();
+        while (it != s_defaultRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFString IODGeneralStudyModule::getName() const

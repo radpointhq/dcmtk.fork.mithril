@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2009-2025, OFFIS e.V.
+ *  Copyright (C) 2009-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -31,6 +31,7 @@
 #include "dcmtk/dcmnet/diutil.h" /* for DCMNET_WARN() */
 #include "dcmtk/dcmnet/scpcfg.h"
 #include "dcmtk/oflog/oflog.h"
+#include "dcmtk/ofstd/oftypes.h"
 
 // include this file in doxygen documentation
 
@@ -360,6 +361,17 @@ public:
      */
     void setAlwaysAcceptDefaultRole(const OFBool enabled);
 
+    /** Set the maximum permitted sequence nesting depth for parsing
+     *  datasets received over the network. This limit is applied to
+     *  each dataset received via receiveDIMSEDataset().
+     *  - Value 0 (default): apply the compile-time default
+     *    (DCMTK_MAX_SEQUENCE_NESTING)
+     *  - Value -1: disable the check (allow unlimited nesting)
+     *  - Value > 0: use this value as the maximum nesting depth
+     *  @param maxDepth maximum nesting depth setting
+     */
+    void setMaxNestingDepth(const Sint32 maxDepth);
+
     /* Get methods for SCP settings */
 
     /** Returns TCP/IP port number SCP listens for new connection requests
@@ -433,6 +445,14 @@ public:
      *  @return The current progress notification mode, enabled if OFTrue
      */
     OFBool getProgressNotificationMode() const;
+
+    /** Return the maximum permitted sequence nesting depth for
+     *  parsing datasets received over the network.
+     *  @return maximum nesting depth setting
+     *    (0 = compile-time default DCMTK_MAX_SEQUENCE_NESTING,
+     *    -1 = unlimited)
+     */
+    Sint32 getMaxNestingDepth() const;
 
     /** Get access to the configuration of the SCP. Note that the functionality
      *  on the configuration object is shadowed by other API functions of DcmSCP.
@@ -621,7 +641,7 @@ protected:
      *  completely by calling setProgressNotificationMode().
      *  @param byteCount [in] Number of bytes sent so far
      */
-    virtual void notifySENDProgress(const unsigned long byteCount);
+    virtual void notifySENDProgress(const Uint64 byteCount);
 
     /** This function is called while receiving DIMSE messages, i.e.\ on each PDV of a dataset.
      *  The default implementation just prints a TRACE message on the number of bytes received
@@ -630,7 +650,7 @@ protected:
      *  completely by calling setProgressNotificationMode().
      *  @param byteCount [in] Number of bytes received so far
      */
-    virtual void notifyRECEIVEProgress(const unsigned long byteCount);
+    virtual void notifyRECEIVEProgress(const Uint64 byteCount);
 
     /** This method can be used to return from the listen() loop in a controlled way.
      *  In order to use it, it must be overwritten in a derived class. As long as no
@@ -933,6 +953,43 @@ protected:
                                            const OFString& sopInstanceUID,
                                            const Uint16 rspStatusCode);
 
+    // -- N-GET --
+
+    /** Receive N-GET request on the currently opened association.
+     *  N-GET carries no separate dataset: the Attribute Identifier List is encoded
+     *  inside the command set and is already parsed when this method is called.
+     *  @param reqMessage              [in]  The N-GET request message that was received
+     *  @param presID                  [in]  The presentation context used by the request
+     *  @param attributeIdentifierList [out] List of attribute tags requested by the SCU.
+     *                                       An empty list means no Attribute Identifier List
+     *                                       was specified; all attributes are then assumed
+     *                                       per PS3.7 Section 10.1.2.1.5.
+     *  @return EC_Normal if successful, an error code otherwise
+     */
+    virtual OFCondition receiveNGETRequest(T_DIMSE_N_GetRQ& reqMessage,
+                                           const T_ASC_PresentationContextID presID,
+                                           OFList<DcmTagKey>& attributeIdentifierList);
+
+    /** Send N-GET response on the currently opened association.
+     *  @param presID         [in] The presentation context ID to respond on
+     *  @param messageID      [in] The message ID being responded to
+     *  @param sopClassUID    [in] The affected SOP Class UID (sent as optional field)
+     *  @param sopInstanceUID [in] The affected SOP Instance UID (sent as optional field)
+     *  @param rspStatusCode  [in] The response status code. 0 means success,
+     *                             others can be found in the DICOM standard.
+     *  @param attributeList  [in] Optional attribute list dataset to return to the SCU.
+     *                             Pass NULL if no attribute list should be included.
+     *                             Ownership is NOT transferred; the caller is responsible
+     *                             for memory management.
+     *  @return EC_Normal if successful, an error code otherwise
+     */
+    virtual OFCondition sendNGETResponse(const T_ASC_PresentationContextID presID,
+                                         const Uint16 messageID,
+                                         const OFString& sopClassUID,
+                                         const OFString& sopInstanceUID,
+                                         const Uint16 rspStatusCode,
+                                         DcmDataset* attributeList);
+
     // -- N-EVENT-REPORT --
 
     /** Receive N-EVENT-REPORT request on the currently opened association and send a
@@ -1137,13 +1194,13 @@ protected:
      *  @param callbackContext [in] The desired user callback data
      *  @param byteCount       [in] Progress bytes count
      */
-    static void callbackSENDProgress(void* callbackContext, unsigned long byteCount);
+    static void callbackSENDProgress(void* callbackContext, Uint64 byteCount);
 
     /** Callback function used for receiving DIMSE messages.
      *  @param callbackContext [in] The desired user callback data
      *  @param byteCount       [in] Progress bytes count
      */
-    static void callbackRECEIVEProgress(void* callbackContext, unsigned long byteCount);
+    static void callbackRECEIVEProgress(void* callbackContext, Uint64 byteCount);
 
 private:
     /// Network instance run by this SCP
@@ -1156,6 +1213,11 @@ private:
     /// might like to share a single configuration instance with multiple SCPs without copying
     /// it, e.g. in the context of the DcmSCPPool class.
     DcmSharedSCPConfig m_cfg;
+
+    /// Maximum sequence nesting depth for parsing received datasets
+    /// (0 = compile-time default DCMTK_MAX_SEQUENCE_NESTING,
+    /// -1 = unlimited)
+    Sint32 m_maxNestingDepth;
 
     /** Drops association and clears internal structures to free memory
      */

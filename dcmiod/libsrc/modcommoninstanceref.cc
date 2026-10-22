@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -23,6 +23,21 @@
 #include "dcmtk/dcmiod/modcommoninstanceref.h"
 #include "dcmtk/dcmiod/iodutil.h" // for static helpers
 #include "dcmtk/dcmdata/dcvrui.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_commonInstRules;
+    OFMutex                s_commonInstMutex;
+    OFshared_ptr<IODRules> s_studiesOtherRules;
+    OFMutex                s_studiesOtherMutex;
+}
 
 const OFString IODCommonInstanceReferenceModule::m_ComponentName = "CommonInstanceReferenceModule";
 const OFString IODCommonInstanceReferenceModule::StudiesOtherInstancesItem::m_ComponentName
@@ -199,13 +214,35 @@ size_t IODCommonInstanceReferenceModule::addReferences(const IODReferences& refe
 
 void IODCommonInstanceReferenceModule::resetRules()
 {
-    // Parameters for Rule are tag, VM, type (1,1C,2,2C,3), module name and logical IOD level
-    m_Rules->addRule(new IODRule(DCM_ReferencedSeriesSequence, "1-n", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(
-        new IODRule(
-            DCM_StudiesContainingOtherReferencedInstancesSequence, "1-n", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-        OFTrue);
+    s_commonInstMutex.lock();
+    if (!s_commonInstRules)
+    {
+        s_commonInstRules.reset(new IODRules());
+        s_commonInstRules->addRule(
+            new IODRule(DCM_ReferencedSeriesSequence, "1-n", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_commonInstRules->addRule(
+            new IODRule(DCM_StudiesContainingOtherReferencedInstancesSequence,
+                        "1-n",
+                        "1C",
+                        getName(),
+                        DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+    }
+    s_commonInstMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_commonInstRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_commonInstRules->begin();
+        while (it != s_commonInstRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition IODCommonInstanceReferenceModule::addSeriesReference(
@@ -317,8 +354,28 @@ OFCondition IODCommonInstanceReferenceModule::StudiesOtherInstancesItem::write(D
 
 void IODCommonInstanceReferenceModule::StudiesOtherInstancesItem::resetRules()
 {
-    // Parameters for Rule are tag, VM, type (1,1C,2,2C,3), module name and logical IOD level
-    m_Rules->addRule(new IODRule(DCM_StudyInstanceUID, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    s_studiesOtherMutex.lock();
+    if (!s_studiesOtherRules)
+    {
+        s_studiesOtherRules.reset(new IODRules());
+        s_studiesOtherRules->addRule(
+            new IODRule(DCM_StudyInstanceUID, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_studiesOtherMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_studiesOtherRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_studiesOtherRules->begin();
+        while (it != s_studiesOtherRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 IODSeriesAndInstanceReferenceMacro&

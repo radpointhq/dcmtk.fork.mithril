@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2011-2024, OFFIS e.V.
+ *  Copyright (C) 2011-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -361,7 +361,6 @@ class DCMTK_DCMNET_EXPORT DcmStorageSCU
      *  @return status, EC_Normal if successful, an error code otherwise
      */
     OFCondition createReportFile(const OFString &filename) const;
-
 
   protected:
 

@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2016-2024, Open Connections GmbH
+ *  Copyright (C) 2016-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -22,6 +22,21 @@
 #include "dcmtk/config/osconfig.h" /* make sure OS specific configuration is included first */
 #include "dcmtk/dcmiod/modfloatingpointimagepixel.h"
 #include "dcmtk/dcmdata/dcdeftag.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_fpImagePixelRules;
+    OFMutex                s_fpImagePixelMutex;
+    OFshared_ptr<IODRules> s_doubleFpImagePixelRules;
+    OFMutex                s_doubleFpImagePixelMutex;
+}
 
 const OFString IODFloatingPointImagePixelModule::m_ModuleName          = "FloatingPointImagePixelModule";
 const DcmTagKey IODFloatingPointImagePixelModule::pixel_data_tag       = DCM_FloatPixelData;
@@ -57,16 +72,42 @@ IODFloatingPointImagePixelModule::~IODFloatingPointImagePixelModule()
 
 void IODFloatingPointImagePixelModule::resetRules()
 {
-    // Parameters this module is responsible for.
-    m_Rules->addRule(new IODRule(DCM_SamplesPerPixel, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PhotometricInterpretation, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Rows, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Columns, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BitsAllocated, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PixelAspectRatio, "2", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_FloatPixelPaddingValue, "1", "3", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_FloatPixelPaddingRangeLimit, "1", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE),
-                     OFTrue);
+    s_fpImagePixelMutex.lock();
+    if (!s_fpImagePixelRules)
+    {
+        s_fpImagePixelRules.reset(new IODRules());
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_SamplesPerPixel, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_PhotometricInterpretation, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_Rows, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_Columns, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_BitsAllocated, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_PixelAspectRatio, "2", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_FloatPixelPaddingValue, "1", "3", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_fpImagePixelRules->addRule(
+            new IODRule(DCM_FloatPixelPaddingRangeLimit, "1", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+    }
+    s_fpImagePixelMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_fpImagePixelRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_fpImagePixelRules->begin();
+        while (it != s_fpImagePixelRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition IODFloatingPointImagePixelModule::read(DcmItem& source, const OFBool clearOldData)
@@ -158,20 +199,44 @@ IODDoubleFloatingPointImagePixelModule::~IODDoubleFloatingPointImagePixelModule(
 
 void IODDoubleFloatingPointImagePixelModule::resetRules()
 {
-    // Parameters are tag, VM, type. Overwrite old rules if any.
-    // Take over responsibility for Photometric Interpretation since we want to write
-    // "MONOCHROME2" as a fixed value.
-    m_Rules->addRule(new IODRule(DCM_SamplesPerPixel, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(
-        new IODRule(DCM_PhotometricInterpretation, "1", "1", getName(), DcmIODTypes::IE_IMAGE, "MONOCHROME2"), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Rows, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Columns, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BitsAllocated, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PixelAspectRatio, "2", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DoubleFloatPixelPaddingValue, "1", "3", m_ModuleName, DcmIODTypes::IE_IMAGE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DoubleFloatPixelPaddingRangeLimit, "1", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE),
-                     OFTrue);
+    s_doubleFpImagePixelMutex.lock();
+    if (!s_doubleFpImagePixelRules)
+    {
+        s_doubleFpImagePixelRules.reset(new IODRules());
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_SamplesPerPixel, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_PhotometricInterpretation, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE, "MONOCHROME2"),
+            OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_Rows, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_Columns, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_BitsAllocated, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_PixelAspectRatio, "2", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_DoubleFloatPixelPaddingValue, "1", "3", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_doubleFpImagePixelRules->addRule(
+            new IODRule(DCM_DoubleFloatPixelPaddingRangeLimit, "1", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE),
+            OFTrue);
+    }
+    s_doubleFpImagePixelMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_doubleFpImagePixelRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_doubleFpImagePixelRules->begin();
+        while (it != s_doubleFpImagePixelRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition IODDoubleFloatingPointImagePixelModule::read(DcmItem& source, const OFBool clearOldData)

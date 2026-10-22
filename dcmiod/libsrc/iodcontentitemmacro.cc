@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2016-2024, Open Connections GmbH
+ *  Copyright (C) 2016-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -31,6 +31,21 @@
 
 #include "dcmtk/dcmiod/iodcontentitemmacro.h"
 #include "dcmtk/dcmiod/iodutil.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_refSOPSeqRules;
+    OFMutex                s_refSOPSeqMutex;
+    OFshared_ptr<IODRules> s_contentItemRules;
+    OFMutex                s_contentItemMutex;
+}
 
 const OFString ContentItemMacro::ReferencedSOPSequenceItem::m_ComponentName = "ReferencedSOPSequenceItem";
 
@@ -70,10 +85,30 @@ OFString ContentItemMacro::ReferencedSOPSequenceItem::getName() const
 
 void ContentItemMacro::ReferencedSOPSequenceItem::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_ReferencedFrameNumber, "1-n", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ReferencedSegmentNumber, "1-n", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue);
+    s_refSOPSeqMutex.lock();
+    if (!s_refSOPSeqRules)
+    {
+        s_refSOPSeqRules.reset(new IODRules());
+        s_refSOPSeqRules->addRule(
+            new IODRule(DCM_ReferencedFrameNumber, "1-n", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_refSOPSeqRules->addRule(
+            new IODRule(DCM_ReferencedSegmentNumber, "1-n", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    }
+    s_refSOPSeqMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_refSOPSeqRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_refSOPSeqRules->begin();
+        while (it != s_refSOPSeqRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition ContentItemMacro::ReferencedSOPSequenceItem::read(DcmItem& source, const OFBool clearOldData)
@@ -208,23 +243,56 @@ OFString ContentItemMacro::getName() const
 
 void ContentItemMacro::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_ValueType, "1", "1", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ConceptNameCodeSequence, "1", "1", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_DateTime, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Date, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Time, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PersonName, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_UID, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_TextValue, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ConceptCodeSequence, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_NumericValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_FloatingPointValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RationalNumeratorValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RationalDenominatorValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_MeasurementUnitsCodeSequence, "1", "1C", getName(), DcmIODTypes::IE_SERIES),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ReferencedSOPSequence, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+    s_contentItemMutex.lock();
+    if (!s_contentItemRules)
+    {
+        s_contentItemRules.reset(new IODRules());
+        s_contentItemRules->addRule(
+            new IODRule(DCM_ValueType, "1", "1", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_ConceptNameCodeSequence, "1", "1", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_DateTime, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_Date, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_Time, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_PersonName, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_UID, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_TextValue, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_ConceptCodeSequence, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_NumericValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_FloatingPointValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_RationalNumeratorValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_RationalDenominatorValue, "1-n", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_MeasurementUnitsCodeSequence, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+        s_contentItemRules->addRule(
+            new IODRule(DCM_ReferencedSOPSequence, "1", "1C", getName(), DcmIODTypes::IE_SERIES), OFTrue);
+    }
+    s_contentItemMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_contentItemRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_contentItemRules->begin();
+        while (it != s_contentItemRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition ContentItemMacro::read(DcmItem& source, const OFBool clearOldData)

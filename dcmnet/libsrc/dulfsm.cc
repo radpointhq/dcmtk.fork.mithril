@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were partly developed by
@@ -287,7 +287,7 @@ static void closeTransport(PRIVATE_ASSOCIATIONKEY ** association);
 static void closeTransportTCP(PRIVATE_ASSOCIATIONKEY ** association);
 static OFCondition
 readPDUHead(PRIVATE_ASSOCIATIONKEY ** association,
-            unsigned char *buffer, unsigned long maxlength,
+            unsigned char *buffer, size_t maxlength,
             DUL_BLOCKOPTIONS block, int timeout,
             unsigned char *PDUtype, unsigned char *PDUreserved,
             unsigned long *PDULength);
@@ -299,19 +299,19 @@ readPDU(PRIVATE_ASSOCIATIONKEY ** association, DUL_BLOCKOPTIONS block,
 static OFCondition
 readPDUBody(PRIVATE_ASSOCIATIONKEY ** association,
             DUL_BLOCKOPTIONS block, int timeout,
-            unsigned char *buffer, unsigned long maxLength,
+            unsigned char *buffer, size_t maxLength,
             unsigned char *pduType, unsigned char *pduReserved,
             unsigned long *pduLength);
 static OFCondition
 readPDUHeadTCP(PRIVATE_ASSOCIATIONKEY ** association,
-               unsigned char *buffer, unsigned long maxLength,
+               unsigned char *buffer, size_t maxLength,
                DUL_BLOCKOPTIONS block, int timeout,
                unsigned char *PDUtype, unsigned char *PDUreserved,
                unsigned long *PDULength);
 static OFCondition
 readPDUBodyTCP(PRIVATE_ASSOCIATIONKEY ** association,
                DUL_BLOCKOPTIONS block, int timeout,
-               unsigned char *buffer, unsigned long maxLength,
+               unsigned char *buffer, size_t maxLength,
                unsigned char *pduType, unsigned char *pduReserved,
                unsigned long *pduLength);
 static OFCondition
@@ -967,14 +967,26 @@ AE_3_AssociateConfirmationAccept(PRIVATE_NETWORKKEY ** /*network*/,
         OFStandard::strlcpy(service->callingAPTitle, assoc.callingAPTitle, sizeof(service->callingAPTitle));
         OFStandard::strlcpy(service->applicationContextName, assoc.applicationContext.data, sizeof(service->applicationContextName));
 
-        if ((service->acceptedPresentationContext = LST_Create()) == NULL) return EC_MemoryExhausted;
+        if ((service->acceptedPresentationContext = LST_Create()) == NULL)
+        {
+            /* free memory allocated by parseAssociate() before returning */
+            destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+            destroyUserInformationLists(&assoc.userInfo);
+            return EC_MemoryExhausted;
+        }
 
         prvCtx = (PRV_PRESENTATIONCONTEXTITEM*)LST_Head(&assoc.presentationContextList);
         if (prvCtx != NULL)
             (void) LST_Position(&assoc.presentationContextList, (LST_NODE*)prvCtx);
         while (prvCtx != NULL) {
             userPresentationCtx = (DUL_PRESENTATIONCONTEXT*)malloc(sizeof(DUL_PRESENTATIONCONTEXT));
-            if (userPresentationCtx == NULL) return EC_MemoryExhausted;
+            if (userPresentationCtx == NULL)
+            {
+                /* free memory allocated by parseAssociate() before returning */
+                destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+                destroyUserInformationLists(&assoc.userInfo);
+                return EC_MemoryExhausted;
+            }
 
             (void) memset(userPresentationCtx, 0, sizeof(DUL_PRESENTATIONCONTEXT));
             userPresentationCtx->result = prvCtx->result;
@@ -1007,6 +1019,9 @@ AE_3_AssociateConfirmationAccept(PRIVATE_NETWORKKEY ** /*network*/,
               char buf1[256];
               OFStandard::snprintf(buf1, sizeof(buf1), "DUL Peer supplied illegal number of transfer syntaxes (%d)", 0);
               free(userPresentationCtx);
+              /* free memory allocated by parseAssociate() before returning */
+              destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+              destroyUserInformationLists(&assoc.userInfo);
               return makeDcmnetCondition(DULC_PEERILLEGALXFERSYNTAXCOUNT, OF_error, buf1);
             }
 
@@ -1015,6 +1030,9 @@ AE_3_AssociateConfirmationAccept(PRIVATE_NETWORKKEY ** /*network*/,
               char buf2[256];
               OFStandard::snprintf(buf2, sizeof(buf2), "DUL Peer supplied illegal number of transfer syntaxes (%ld)", LST_Count(&prvCtx->transferSyntaxList));
               free(userPresentationCtx);
+              /* free memory allocated by parseAssociate() before returning */
+              destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+              destroyUserInformationLists(&assoc.userInfo);
               return makeDcmnetCondition(DULC_PEERILLEGALXFERSYNTAXCOUNT, OF_error, buf2);
             }
             subItem = (DUL_SUBITEM*)LST_Head(&prvCtx->transferSyntaxList);
@@ -1027,10 +1045,23 @@ AE_3_AssociateConfirmationAccept(PRIVATE_NETWORKKEY ** /*network*/,
 
         }
 
-        /* extended negotiation */
+        /* Extended negotiation: ownership of the sub-item objects transfers
+         * from the transient assoc.userInfo.extNegList to service->acceptedExtNegList
+         * via the shallow appendList(). The destroyUserInformationLists() call
+         * a few lines below deliberately frees only the list container; the
+         * items themselves will be released by DUL_ClearServiceParameters()
+         * through the service parameter list. See the ownership note in
+         * destroyUserInformationLists() (helpers.cc).
+         */
         if (assoc.userInfo.extNegList != NULL) {
             service->acceptedExtNegList = new SOPClassExtendedNegotiationSubItemList;
-            if (service->acceptedExtNegList == NULL)  return EC_MemoryExhausted;
+            if (service->acceptedExtNegList == NULL)
+            {
+                /* free memory allocated by parseAssociate() before returning */
+                destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+                destroyUserInformationLists(&assoc.userInfo);
+                return EC_MemoryExhausted;
+            }
             appendList(*assoc.userInfo.extNegList, *service->acceptedExtNegList);
         }
 
@@ -1038,7 +1069,13 @@ AE_3_AssociateConfirmationAccept(PRIVATE_NETWORKKEY ** /*network*/,
         if (assoc.userInfo.usrIdent != NULL) {
           service->ackUserIdentNeg =
             new UserIdentityNegotiationSubItemAC( *(OFstatic_cast(UserIdentityNegotiationSubItemAC*, assoc.userInfo.usrIdent)));
-          if (service->ackUserIdentNeg == NULL)  return EC_MemoryExhausted;
+          if (service->ackUserIdentNeg == NULL)
+          {
+              /* free memory allocated by parseAssociate() before returning */
+              destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+              destroyUserInformationLists(&assoc.userInfo);
+              return EC_MemoryExhausted;
+          }
 
         }
 
@@ -1223,25 +1260,53 @@ AE_6_ExamineAssociateRequest(PRIVATE_NETWORKKEY ** /*network*/,
         OFStandard::strlcpy(service->callingAPTitle, assoc.callingAPTitle, sizeof(service->callingAPTitle));
         OFStandard::strlcpy(service->applicationContextName, assoc.applicationContext.data, sizeof(service->applicationContextName));
 
-        if ((service->requestedPresentationContext = LST_Create()) == NULL) return EC_MemoryExhausted;
+        if ((service->requestedPresentationContext = LST_Create()) == NULL)
+        {
+            /* free memory allocated by parseAssociate() before returning */
+            destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+            destroyUserInformationLists(&assoc.userInfo);
+            return EC_MemoryExhausted;
+        }
         if (translatePresentationContextList(&assoc.presentationContextList,
                                              &assoc.userInfo.SCUSCPRoleList,
                                              &service->requestedPresentationContext).bad())
         {
+            /* free memory allocated by parseAssociate() before returning */
+            destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+            destroyUserInformationLists(&assoc.userInfo);
             return DUL_PCTRANSLATIONFAILURE;
         }
 
-        /* extended negotiation */
+        /* Extended negotiation: ownership of the sub-item objects transfers
+         * from the transient assoc.userInfo.extNegList to service->requestedExtNegList
+         * via the shallow appendList(). The destroyUserInformationLists() call
+         * a few lines below frees only the list container; the items themselves
+         * are released later by DUL_ClearServiceParameters() through the service
+         * parameter list. See the ownership note in destroyUserInformationLists()
+         * (helpers.cc).
+         */
         if (assoc.userInfo.extNegList != NULL) {
             service->requestedExtNegList = new SOPClassExtendedNegotiationSubItemList;
-            if (service->requestedExtNegList == NULL) return EC_MemoryExhausted;
+            if (service->requestedExtNegList == NULL)
+            {
+                /* free memory allocated by parseAssociate() before returning */
+                destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+                destroyUserInformationLists(&assoc.userInfo);
+                return EC_MemoryExhausted;
+            }
             appendList(*assoc.userInfo.extNegList, *service->requestedExtNegList);
         }
 
         /* user identity negotiation: Remember request values in association parameters (copy)*/
         if (assoc.userInfo.usrIdent != NULL) {
           service->reqUserIdentNeg = new UserIdentityNegotiationSubItemRQ();
-          if (service->reqUserIdentNeg == NULL) return EC_MemoryExhausted;
+          if (service->reqUserIdentNeg == NULL)
+          {
+              /* free memory allocated by parseAssociate() before returning */
+              destroyAssociatePDUPresentationContextList(&assoc.presentationContextList);
+              destroyUserInformationLists(&assoc.userInfo);
+              return EC_MemoryExhausted;
+          }
             *(service->reqUserIdentNeg) = *(OFstatic_cast(UserIdentityNegotiationSubItemRQ*,assoc.userInfo.usrIdent));
         }
 
@@ -1412,8 +1477,8 @@ DT_2_IndicatePData(PRIVATE_NETWORKKEY ** /*network*/,
     unsigned long
         pduLength,
         pdvLength,
-        pdvCount,
         length;
+    Uint64 pdvCount;
     unsigned char
        *p;
 
@@ -1460,12 +1525,12 @@ DT_2_IndicatePData(PRIVATE_NETWORKKEY ** /*network*/,
     if (length != 0)
     {
        char buf[256];
-       OFStandard::snprintf(buf, sizeof(buf), "PDV lengths don't add up correctly: %d PDVs. This probably indicates a malformed P-DATA PDU. PDU type is %02x.", (int)pdvCount, (unsigned int) pduType);
+       OFStandard::snprintf(buf, sizeof(buf), "PDV lengths don't add up correctly: %llu PDVs. This probably indicates a malformed P-DATA PDU. PDU type is %02x.", pdvCount, (unsigned int) pduType);
        return makeDcmnetCondition(DULC_ILLEGALPDU, OF_error, buf);
     }
 
     /* let the the association indicate how many PDVs are contained in the PDU */
-    (*association)->pdvCount = (int)pdvCount;
+    (*association)->pdvCount = pdvCount;
 
     /* if at least one PDV is contained in the PDU, the association's pdvIndex has to be set to 0 */
     if (pdvCount > 0)
@@ -3310,7 +3375,7 @@ readPDU(PRIVATE_ASSOCIATIONKEY ** association, DUL_BLOCKOPTIONS block,
         unsigned long *pduLength)
 {
     OFCondition cond = EC_Normal;
-    unsigned long maxLength;
+    size_t maxLength;
     if ((*association)->inputPDU == NO_PDU) {
         cond = readPDUHead(association, (*association)->pduHead,
                            sizeof((*association)->pduHead),
@@ -3329,8 +3394,15 @@ readPDU(PRIVATE_ASSOCIATIONKEY ** association, DUL_BLOCKOPTIONS block,
       return NET_EC_AssociatePDUTooLarge;
     }
 
-    maxLength = ((*association)->nextPDULength)+100;
-    buffer.buffer = (unsigned char *)malloc(size_t(maxLength));
+    // Defense-in-depth: compute the buffer size via safeAdd() so the +100 margin cannot overflow
+    // size_t (an undersized buffer would cause a heap overflow in readPDUBody()). safeAdd() also
+    // avoids a tautological comparison on LLP64 (e.g. Windows), where size_t is wider than nextPDULength.
+    if (!OFStandard::safeAdd(OFstatic_cast(size_t, (*association)->nextPDULength), OFstatic_cast(size_t, 100), maxLength))
+    {
+      DCMNET_ERROR("A-ASSOCIATE PDU too large: " << (*association)->nextPDULength << " bytes, refusing." );
+      return NET_EC_AssociatePDUTooLarge;
+    }
+    buffer.buffer = (unsigned char *)malloc(maxLength);
     if (buffer.buffer)
     {
       (void) memcpy(buffer.buffer, (*association)->pduHead, sizeof((*association)->pduHead));
@@ -3369,7 +3441,7 @@ readPDU(PRIVATE_ASSOCIATIONKEY ** association, DUL_BLOCKOPTIONS block,
 */
 static OFCondition
 readPDUHead(PRIVATE_ASSOCIATIONKEY ** association,
-            unsigned char *buffer, unsigned long maxLength,
+            unsigned char *buffer, size_t maxLength,
             DUL_BLOCKOPTIONS block, int timeout,
             unsigned char *PDUType, unsigned char *PDUReserved,
             unsigned long *PDULength)
@@ -3439,7 +3511,7 @@ readPDUHead(PRIVATE_ASSOCIATIONKEY ** association,
 static OFCondition
 readPDUBody(PRIVATE_ASSOCIATIONKEY ** association,
             DUL_BLOCKOPTIONS block, int timeout,
-            unsigned char *buffer, unsigned long maxLength,
+            unsigned char *buffer, size_t maxLength,
             unsigned char *pduType, unsigned char *pduReserved,
             unsigned long *pduLength)
 {
@@ -3486,7 +3558,7 @@ readPDUBody(PRIVATE_ASSOCIATIONKEY ** association,
 
 static OFCondition
 readPDUHeadTCP(PRIVATE_ASSOCIATIONKEY ** association,
-               unsigned char *buffer, unsigned long maxLength,
+               unsigned char *buffer, size_t maxLength,
                DUL_BLOCKOPTIONS block, int timeout,
      unsigned char *type, unsigned char *reserved, unsigned long *pduLength)
 {
@@ -3595,7 +3667,7 @@ readPDUHeadTCP(PRIVATE_ASSOCIATIONKEY ** association,
 static OFCondition
 readPDUBodyTCP(PRIVATE_ASSOCIATIONKEY ** association,
                DUL_BLOCKOPTIONS block, int timeout,
-               unsigned char *buffer, unsigned long maxLength,
+               unsigned char *buffer, size_t maxLength,
                unsigned char *pduType, unsigned char *pduReserved,
                unsigned long *pduLength)
 {
@@ -3929,6 +4001,8 @@ translatePresentationContextList(LST_HEAD ** internalList,
         {
             char buf1[256];
             OFStandard::snprintf(buf1, sizeof(buf1), "DUL Peer supplied illegal number of transfer syntaxes (%d)", 0);
+            /* free the (empty) transfer syntax list allocated for this context above */
+            LST_Destroy(&userContext->proposedTransferSyntax);
             free(userContext);
             return makeDcmnetCondition(DULC_PEERILLEGALXFERSYNTAXCOUNT, OF_error, buf1);
         }

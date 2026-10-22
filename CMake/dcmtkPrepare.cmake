@@ -48,17 +48,17 @@ endif()
 # Basic version information
 set(DCMTK_MAJOR_VERSION 3)
 set(DCMTK_MINOR_VERSION 7)
-set(DCMTK_BUILD_VERSION 0)
+set(DCMTK_BUILD_VERSION 1)
 # The ABI is not guaranteed to be stable between different snapshots/releases,
 # so this particular version number is increased for each snapshot or release.
-set(DCMTK_ABI_VERSION 20)
+set(DCMTK_ABI_VERSION 21)
 
 # Package "release" settings (some are currently unused and, therefore, disabled)
 set(DCMTK_PACKAGE_NAME "dcmtk")
-set(DCMTK_PACKAGE_DATE "DEV")
+set(DCMTK_PACKAGE_DATE "2026-10-15")
 set(DCMTK_PACKAGE_VERSION "${DCMTK_MAJOR_VERSION}.${DCMTK_MINOR_VERSION}.${DCMTK_BUILD_VERSION}")
 set(DCMTK_PACKAGE_VERSION_NUMBER ${DCMTK_MAJOR_VERSION}${DCMTK_MINOR_VERSION}${DCMTK_BUILD_VERSION})
-set(DCMTK_PACKAGE_VERSION_SUFFIX "+")
+set(DCMTK_PACKAGE_VERSION_SUFFIX "")
 #set(DCMTK_PACKAGE_TARNAME "dcmtk-${DCMTK_PACKAGE_VERSION}")
 #set(DCMTK_PACKAGE_STRING "dcmtk ${DCMTK_PACKAGE_VERSION}")
 #set(DCMTK_PACKAGE_BUGREPORT "bugs@dcmtk.org")
@@ -205,7 +205,7 @@ option(DCMTK_WITH_DOXYGEN "Build API documentation with DOXYGEN." ON)
 option(DCMTK_GENERATE_DOXYGEN_TAGFILE "Generate a tag file with DOXYGEN." OFF)
 option(DCMTK_WIDE_CHAR_FILE_IO_FUNCTIONS "Build with wide char file I/O functions." OFF)
 option(DCMTK_WIDE_CHAR_MAIN_FUNCTION "Build command line tools with wide char main function." OFF)
-option(DCMTK_ENABLE_STL "Enable use of native STL classes and algorithms instead of DCMTK's own implementations." OFF)
+option(DCMTK_ENABLE_STL "Enable use of native STL classes and algorithms instead of DCMTK's own implementations." ON)
 
 macro(DCMTK_INFERABLE_OPTION OPTION DESCRIPTION)
   set("${OPTION}" INFERRED CACHE STRING "${DESCRIPTION}")
@@ -214,17 +214,17 @@ macro(DCMTK_INFERABLE_OPTION OPTION DESCRIPTION)
   mark_as_advanced("${OPTION}")
 endmacro()
 
-DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_VECTOR "Enable use of STL vector.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_ALGORITHM "Enable use of STL algorithm.")
+DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_ATOMIC "Enable use of STL atomic.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_LIST "Enable use of STL list.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_MAP "Enable use of STL map.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_MEMORY "Enable use of STL memory.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_STACK "Enable use of STL stack.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_STRING "Enable use of STL string.")
-DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_TYPE_TRAITS "Enable use of STL type traits.")
-DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_TUPLE "Enable use of STL tuple.")
 DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_SYSTEM_ERROR "Enable use of STL system_error.")
-DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_ATOMIC "Enable use of STL atomic.")
+DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_TUPLE "Enable use of STL tuple.")
+DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_TYPE_TRAITS "Enable use of STL type traits.")
+DCMTK_INFERABLE_OPTION(DCMTK_ENABLE_STL_VECTOR "Enable use of STL vector.")
 
 # On Windows, the built-in dictionary is default, on Unix the external one.
 # It is not possible to use both, built-in plus external default dictionary.
@@ -441,6 +441,7 @@ if(WIN32 AND CMAKE_GENERATOR MATCHES "Visual Studio .*|NMake .*")
 endif()
 
 if(BUILD_SHARED_LIBS)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   set(DCMTK_SHARED ON)
   if(BUILD_SINGLE_SHARED_LIBRARY)
     # We can't build apps, because there is no way to tell CMake to link apps
@@ -567,8 +568,6 @@ endif()
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -DDEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG")
 
-option(DCMTK_PERMIT_CXX98 "Permit (deprecated) compilation with C++98 language standard. This will cease to function in a future DCMTK release." OFF)
-
 # If desired C++ standard is at least C++11, set DCMTK_MODERN_CXX_STANDARD to true
 # and remember it in global property DCMTK_MODERN_CXX_STANDARD.
 # This is later evaluated in GenerateDCMTKConfigure.cmake in order to check
@@ -578,11 +577,8 @@ option(DCMTK_PERMIT_CXX98 "Permit (deprecated) compilation with C++98 language s
 if(NOT DEFINED CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 11)
   set(DCMTK_MODERN_CXX_STANDARD TRUE)
-elseif(CMAKE_CXX_STANDARD MATCHES "^9[0-9]?$" AND NOT DCMTK_PERMIT_CXX98)
-  message(FATAL_ERROR "DCMTK will require C++11 or later in the future. Use cmake option -DDCMTK_PERMIT_CXX98=ON to override this error (for now)")
 elseif(CMAKE_CXX_STANDARD MATCHES "^9[0-9]?$")
-  set(DCMTK_MODERN_CXX_STANDARD FALSE)
-  message(WARNING "DCMTK will require C++11 or later in the future, continuing for now.")
+  message(FATAL_ERROR "DCMTK requires C++11 or later.")
 elseif(CMAKE_CXX_STANDARD GREATER 20)
   MESSAGE(WARNING "DCMTK is only known to compile for C++ versions <= 20 (C++${CMAKE_CXX_STANDARD} requested).")
   set(DCMTK_MODERN_CXX_STANDARD TRUE)
@@ -625,6 +621,114 @@ else()
        (CMAKE_CXX_COMPILER_ID STREQUAL "ARMClang") OR
        (CMAKE_CXX_COMPILER_ID STREQUAL "XLClang"))
        add_compile_options("-Wall")
+    endif()
+endif()
+
+#-----------------------------------------------------------------------------
+# Optional sanitizer support
+#-----------------------------------------------------------------------------
+
+# DCMTK_WITH_SANITIZERS turns on AddressSanitizer (and, on Linux, also
+# LeakSanitizer) for compile and link of every DCMTK target. It exists to
+# give the unit tests a real memory-error / leak regression net; functional
+# OFCHECK asserts alone cannot detect heap-only leaks.
+#
+# Known-good compiler/platform combinations are at least the ones in the "last
+# release" tested table in INSTALL: GCC, Clang, MinGW Clang and MinGW gcc
+# (handled by the GNU/Clang branch) and MSVC 2019 (16.9) and later (handled by
+# the MSVC branch). On any other compiler / OS we emit a CMake warning and
+# continue the build without sanitizer flags, so an unexpected toolchain never
+# breaks the build silently or noisily.
+option(DCMTK_WITH_SANITIZERS "Compile with AddressSanitizer (and LeakSanitizer on Linux) for memory-error detection." OFF)
+
+if(DCMTK_WITH_SANITIZERS)
+    set(_dcmtk_sanitizer_supported FALSE)
+    if((CMAKE_CXX_COMPILER_ID STREQUAL "GNU") OR
+       (CMAKE_CXX_COMPILER_ID STREQUAL "Clang") OR
+       (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang"))
+        set(_dcmtk_sanitizer_supported TRUE)
+        set(_dcmtk_sanitizer_compile "-fsanitize=address -fno-omit-frame-pointer -g")
+        set(_dcmtk_sanitizer_link    "-fsanitize=address")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            # LeakSanitizer is integrated with AddressSanitizer and reliably
+            # supported on Linux for both GCC and Clang. On macOS, *BSD and
+            # Windows it is either missing, runtime-gated or unreliable, so
+            # we only auto-enable it on Linux to keep the option deterministic.
+            set(_dcmtk_sanitizer_compile "${_dcmtk_sanitizer_compile} -fsanitize=leak")
+            set(_dcmtk_sanitizer_link    "${_dcmtk_sanitizer_link} -fsanitize=leak")
+            message(STATUS "Info: AddressSanitizer and LeakSanitizer will be enabled")
+        else()
+            message(STATUS "Info: AddressSanitizer will be enabled (LeakSanitizer is only auto-enabled on Linux)")
+        endif()
+        # add_link_options() would be cleaner but only exists from CMake
+        # 3.13; the DCMTK minimum is 3.7, so we append to the legacy
+        # string-valued linker flag variables.
+        set(CMAKE_C_FLAGS             "${CMAKE_C_FLAGS} ${_dcmtk_sanitizer_compile}")
+        set(CMAKE_CXX_FLAGS           "${CMAKE_CXX_FLAGS} ${_dcmtk_sanitizer_compile}")
+        set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS} ${_dcmtk_sanitizer_link}")
+        set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${_dcmtk_sanitizer_link}")
+        set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${_dcmtk_sanitizer_link}")
+    elseif(MSVC)
+        # /fsanitize=address requires Visual Studio 2019 version 16.9
+        # (released March 2021) or newer. Visual Studio 2017 will fail to
+        # compile with this flag. LeakSanitizer is not available on MSVC,
+        # only AddressSanitizer is supported. The MSVC ASan runtime is
+        # linked automatically by the compiler driver, so no extra linker
+        # flag is required here.
+        set(_dcmtk_sanitizer_supported TRUE)
+        set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} /fsanitize=address")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fsanitize=address")
+
+        # MSVC's /fsanitize=address is mutually exclusive with the runtime
+        # check group /RTC* (compile error C5072) and degrades to a linker
+        # warning when combined with /INCREMENTAL. CMake's stock Debug
+        # configuration adds /RTC1 to *_FLAGS_DEBUG, and the default linker
+        # rules enable /INCREMENTAL for Debug and RelWithDebInfo. Both come
+        # from CMake itself, not from DCMTK, so we strip them here in the
+        # same spirit as the existing /W[0-9] cleanup further below: the
+        # user explicitly opted into sanitizers, so we remove the incompatible
+        # CMake-default flags rather than failing the build or forcing a
+        # manual workaround. This is announced via STATUS so the change is
+        # visible at configure time. A user who genuinely wants
+        # /RTC* or /INCREMENTAL alongside sanitizers can re-add them by
+        # passing them through their own CXXFLAGS / linker flag overrides
+        # after this block runs.
+        set(_dcmtk_stripped_rtc FALSE)
+        foreach(FLAG C CXX)
+            foreach(CFG DEBUG RELWITHDEBINFO MINSIZEREL RELEASE)
+                if(CMAKE_${FLAG}_FLAGS_${CFG} MATCHES "/RTC")
+                    string(REGEX REPLACE "[ \t\r\n]+/RTC[a-zA-Z1]*" "" "CMAKE_${FLAG}_FLAGS_${CFG}" "${CMAKE_${FLAG}_FLAGS_${CFG}}")
+                    string(REGEX REPLACE "/RTC[a-zA-Z1]*[ \t\r\n]*" "" "CMAKE_${FLAG}_FLAGS_${CFG}" "${CMAKE_${FLAG}_FLAGS_${CFG}}")
+                    set(_dcmtk_stripped_rtc TRUE)
+                endif()
+            endforeach()
+        endforeach()
+        set(_dcmtk_stripped_incremental FALSE)
+        foreach(LINK EXE SHARED MODULE)
+            foreach(CFG DEBUG RELWITHDEBINFO MINSIZEREL RELEASE)
+                if(CMAKE_${LINK}_LINKER_FLAGS_${CFG} MATCHES "/INCREMENTAL")
+                    # Replace /INCREMENTAL with /INCREMENTAL:NO rather than
+                    # deleting it outright. Some MSVC toolchains default to
+                    # incremental linking when no flag is present at all,
+                    # so an explicit :NO ensures the conflict is resolved
+                    # deterministically across CMake versions.
+                    string(REGEX REPLACE "/INCREMENTAL(:NO)?" "/INCREMENTAL:NO" "CMAKE_${LINK}_LINKER_FLAGS_${CFG}" "${CMAKE_${LINK}_LINKER_FLAGS_${CFG}}")
+                    set(_dcmtk_stripped_incremental TRUE)
+                endif()
+            endforeach()
+        endforeach()
+        if(_dcmtk_stripped_rtc)
+            message(STATUS "Info: removed /RTC* flags from MSVC C/CXX flags (incompatible with AddressSanitizer)")
+        endif()
+        if(_dcmtk_stripped_incremental)
+            message(STATUS "Info: forced /INCREMENTAL:NO on MSVC linker flags (AddressSanitizer is incompatible with incremental linking)")
+        endif()
+
+        message(STATUS "Info: AddressSanitizer will be enabled (requires Visual Studio 2019 16.9 or newer; LeakSanitizer is not available on MSVC)")
+    endif()
+
+    if(NOT _dcmtk_sanitizer_supported)
+        message(WARNING "Info: AddressSanitizer support will be disabled (no sanitizer support is known for compiler '${CMAKE_CXX_COMPILER_ID}' on '${CMAKE_SYSTEM_NAME}'; continuing build without sanitizer flags)")
     endif()
 endif()
 
@@ -712,6 +816,7 @@ if(DCMTK_WITH_OPENSSL)
   CHECK_FUNCTIONWITHHEADER_EXISTS("TLS1_TXT_ECDHE_ECDSA_WITH_AES_256_CCM_8" "openssl/ssl.h" HAVE_OPENSSL_PROTOTYPE_TLS1_TXT_ECDHE_ECDSA_WITH_AES_256_CCM_8)
   CHECK_FUNCTIONWITHHEADER_EXISTS("TLS1_TXT_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384" "openssl/ssl.h" HAVE_OPENSSL_PROTOTYPE_TLS1_TXT_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384)
   CHECK_FUNCTIONWITHHEADER_EXISTS("TS_VERIFY_CTX_set0_store(0,0)" "openssl/ts.h" HAVE_OPENSSL_PROTOTYPE_TS_VERIFY_CTX_SET0_STORE)
+  CHECK_FUNCTIONWITHHEADER_EXISTS("X509_check_certificate_times(0,0,0)" "openssl/x509.h" HAVE_OPENSSL_PROTOTYPE_X509_CHECK_CERTIFICATE_TIMES)
 
   # test presence of functions, constants and macros needed for the dcmsign module
   CHECK_FUNCTIONWITHHEADER_EXISTS("EVP_PKEY_get_group_name" "openssl/evp.h" HAVE_OPENSSL_PROTOTYPE_EVP_PKEY_GET_GROUP_NAME)

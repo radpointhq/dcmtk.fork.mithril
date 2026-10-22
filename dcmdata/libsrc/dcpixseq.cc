@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -23,7 +23,7 @@
 #include "dcmtk/config/osconfig.h"    /* make sure OS specific configuration is included first */
 
 #include "dcmtk/ofstd/ofstream.h"
-#include "dcmtk/ofstd/ofuuid.h"
+#include "dcmtk/ofstd/ofuuidgn.h"
 #include "dcmtk/ofstd/ofsha256.h"
 
 #include "dcmtk/dcmdata/dcpixseq.h"
@@ -70,23 +70,23 @@ DcmPixelSequence::~DcmPixelSequence()
 
 DcmPixelSequence &DcmPixelSequence::operator=(const DcmPixelSequence &obj)
 {
-  if (this != &obj)
-  {
-    DcmSequenceOfItems::operator=(obj);
-    Xfer = obj.Xfer;
-  }
-  return *this;
+    if (this != &obj)
+    {
+        DcmSequenceOfItems::operator=(obj);
+        Xfer = obj.Xfer;
+    }
+    return *this;
 }
 
 
 OFCondition DcmPixelSequence::copyFrom(const DcmObject& rhs)
 {
-  if (this != &rhs)
-  {
-    if (rhs.ident() != ident()) return EC_IllegalCall;
-    *this = OFstatic_cast(const DcmPixelSequence &, rhs);
-  }
-  return EC_Normal;
+    if (this != &rhs)
+    {
+        if (rhs.ident() != ident()) return EC_IllegalCall;
+        *this = OFstatic_cast(const DcmPixelSequence &, rhs);
+    }
+    return EC_Normal;
 }
 
 // ********************************
@@ -161,15 +161,20 @@ OFCondition DcmPixelSequence::writeXML(STD_NAMESPACE ostream &out,
             if (flags & DCMTypes::XF_encodeBase64)
             {
                 out << "<InlineBinary>";
-                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue());
+                /* the Native DICOM Model requires little endian byte ordering */
+                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue(EBO_LittleEndian));
                 OFStandard::encodeBase64(out, byteValues, OFstatic_cast(size_t, getLengthField()));
                 out << "</InlineBinary>" << OFendl;
             } else {
                 /* generate a new UID but the binary data is not (yet) written. */
-                OFUUID uuid;
-                out << "<BulkData uuid=\"";
-                uuid.print(out, OFUUID::ER_RepresentationHex);
-                out << "\"/>" << OFendl;
+                OFshared_ptr<OFUUID> const uuid = OFUUIDGenerator::create();
+                if (uuid) {
+                    out << "<BulkData uuid=\"";
+                    uuid->print(out, OFUUID::NotationCanonical);
+                    out << "\"/>" << OFendl;
+                } else {
+                    l_error = EC_MemoryExhausted;
+                }
             }
         }
         /* write XML end tag */
@@ -220,7 +225,7 @@ OFCondition DcmPixelSequence::writeJson(
     DcmXfer xfer(Xfer);
     OFString bulkname;
     char hashstring[3];
-    for (int i=0; i < 32; ++i)
+    for (int i = 0; i < 32; ++i)
     {
         OFStandard::snprintf(hashstring, sizeof(hashstring), "%02x", hash[i]);
         bulkname.append(hashstring);
@@ -235,7 +240,7 @@ OFCondition DcmPixelSequence::writeJson(
      * we would create now since the SHA-256 checksum is the same. So we can just
      * use the existing file.
      */
-    if (! OFStandard::fileExists(bulkpath))
+    if (!OFStandard::fileExists(bulkpath))
     {
         OFFile bulkfile;
         if (! bulkfile.fopen(bulkpath.c_str(), "wb"))
@@ -335,16 +340,17 @@ OFCondition DcmPixelSequence::insert(DcmPixelItem *item,
     errorFlag = EC_Normal;
     if (item != NULL)
     {
+        OFBool inserted = OFFalse;
         // special case: last position
         if (where == DCM_EndOfListIndex)
         {
             // insert at end of list (avoid seeking)
-            itemList->append(item);
+            inserted = (itemList->append(item) != NULL);
             DCMDATA_TRACE("DcmPixelSequence::insert() Item at last position inserted");
         } else {
             // insert after "where"
             itemList->seek_to(where);
-            itemList->insert(item);
+            inserted = (itemList->insert(item) != NULL);
             DCMDATA_TRACE("DcmPixelSequence::insert() Item at position " << where << " inserted");
         }
         // check whether the new item already has a parent
@@ -353,8 +359,11 @@ OFCondition DcmPixelSequence::insert(DcmPixelItem *item,
             DCMDATA_DEBUG("DcmPixelSequence::insert() PixelItem already has a parent: "
                 << item->getParent()->getTag() << " VR=" << DcmVR(item->getParent()->getVR()).getVRName());
         }
-        // remember the parent (i.e. the surrounding sequence)
-        item->setParent(this);
+        if (inserted)
+        {
+            // remember the parent (i.e. the surrounding sequence)
+            item->setParent(this);
+        }
     } else
         errorFlag = EC_IllegalCall;
     return errorFlag;

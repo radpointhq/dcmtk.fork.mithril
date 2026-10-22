@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2024-2025, Open Connections GmbH
+ *  Copyright (C) 2024-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -392,7 +392,7 @@ static void addFrames(DcmSegmentation* seg, const Uint8 bitsAllocated)
 
 static void addSegments(DcmSegmentation *seg, const Uint8 bitsAllocated)
 {
-    for (Uint32 i = 0; i < ((bitsAllocated == 16) ? 65535u : 255u); i++)
+    for (Uint32 i = 0; i < ((bitsAllocated == 16) ? 65535u : 256u); i++)
     {
         DcmSegment* segment = NULL;
         CodeSequenceMacro category("85756007", "SCT", "Tissue");
@@ -509,7 +509,7 @@ static void checkCreatedObject(DcmDataset* dset, const Uint8 bits_allocated, con
     OFCHECK(seq != NULL);
     if (seq)
     {
-        OFCHECK(seq->card() == ((bits_allocated == 16) ? 65535u : 255u));
+        OFCHECK(seq->card() == ((bits_allocated == 16) ? 65535u : 256u));
     }
     // check that there is no Segmentation FG
     DcmElement *fgSeq = NULL;

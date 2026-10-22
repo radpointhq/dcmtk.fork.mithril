@@ -84,19 +84,51 @@ OFrvalue<OFunique_ptr<STRATEGY> > JlsCodecFactory<STRATEGY>::GetCodec(const JlsP
     STRATEGY* pstrategy = NULL;
     if (presets.RESET != 0 && presets.RESET != BASIC_RESET)
     {
+        // Select the pixel type based on the number of components and the
+        // interleave mode, exactly as GetCodecImpl() does. Otherwise a
+        // 3-component ILV_SAMPLE image would be decoded with a single-sample
+        // codec whose scanline buffer is too small for the triplet color
+        // transform, causing an out-of-bounds read. (pstrategy remains NULL
+        // for unsupported ILV_SAMPLE component counts, as in GetCodecImpl().)
         if (info.bitspersample <= 8)
         {
-            DefaultTraitsT<BYTE, BYTE> traits((1 << info.bitspersample) - 1, info.allowedlossyerror);
-            traits.MAXVAL = presets.MAXVAL;
-            traits.RESET = presets.RESET;
-            pstrategy = new JlsCodec<DefaultTraitsT<BYTE, BYTE>, STRATEGY>(traits, info);
+            if (info.ilv == ILV_SAMPLE)
+            {
+                if (info.components == 3)
+                {
+                    DefaultTraitsT<BYTE, Triplet<BYTE> > traits((1 << info.bitspersample) - 1, info.allowedlossyerror);
+                    traits.MAXVAL = presets.MAXVAL;
+                    traits.RESET = presets.RESET;
+                    pstrategy = new JlsCodec<DefaultTraitsT<BYTE, Triplet<BYTE> >, STRATEGY>(traits, info);
+                }
+            }
+            else
+            {
+                DefaultTraitsT<BYTE, BYTE> traits((1 << info.bitspersample) - 1, info.allowedlossyerror);
+                traits.MAXVAL = presets.MAXVAL;
+                traits.RESET = presets.RESET;
+                pstrategy = new JlsCodec<DefaultTraitsT<BYTE, BYTE>, STRATEGY>(traits, info);
+            }
         }
         else
         {
-            DefaultTraitsT<USHORT, USHORT> traits((1 << info.bitspersample) - 1, info.allowedlossyerror);
-            traits.MAXVAL = presets.MAXVAL;
-            traits.RESET = presets.RESET;
-            pstrategy = new JlsCodec<DefaultTraitsT<USHORT, USHORT>, STRATEGY>(traits, info);
+            if (info.ilv == ILV_SAMPLE)
+            {
+                if (info.components == 3)
+                {
+                    DefaultTraitsT<USHORT, Triplet<USHORT> > traits((1 << info.bitspersample) - 1, info.allowedlossyerror);
+                    traits.MAXVAL = presets.MAXVAL;
+                    traits.RESET = presets.RESET;
+                    pstrategy = new JlsCodec<DefaultTraitsT<USHORT, Triplet<USHORT> >, STRATEGY>(traits, info);
+                }
+            }
+            else
+            {
+                DefaultTraitsT<USHORT, USHORT> traits((1 << info.bitspersample) - 1, info.allowedlossyerror);
+                traits.MAXVAL = presets.MAXVAL;
+                traits.RESET = presets.RESET;
+                pstrategy = new JlsCodec<DefaultTraitsT<USHORT, USHORT>, STRATEGY>(traits, info);
+            }
         }
     }
     else

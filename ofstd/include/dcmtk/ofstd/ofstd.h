@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2025, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -38,14 +38,15 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdarg>
-#ifdef HAVE_UNISTD_H
-BEGIN_EXTERN_C
-#include <unistd.h>
-END_EXTERN_C
-#endif
 
 BEGIN_EXTERN_C
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 #include <sys/types.h>  /* for size_t */
+#ifdef HAVE_SYS_PARAM_H
+#include <sys/param.h>  /* for __FreeBSD_version macro on FreeBSD */
+#endif
 END_EXTERN_C
 
 /* Check if we are using glibc in a version where readdir() is known to be
@@ -53,7 +54,7 @@ END_EXTERN_C
  * Android uses a different libc implementation but also guarantees that
  * readdir() is thread-safe and marks readdir_r() as deprecated.
  */
-#if (defined(__GLIBC__) && (((__GLIBC__ == 2) && (__GLIBC_MINOR__ >= 24)) || (__GLIBC__ >= 3))) || defined(__ANDROID__)
+#if (defined(__GLIBC__) && (((__GLIBC__ == 2) && (__GLIBC_MINOR__ >= 24)) || (__GLIBC__ >= 3))) || defined(__ANDROID__) || (defined(__FreeBSD_version) && (__FreeBSD_version >= 1200000))
 #define READDIR_IS_THREADSAFE
 #endif
 
@@ -719,7 +720,7 @@ class DCMTK_OFSTD_EXPORT OFStandard
      *  even multiple of 3.  A special character ('=') is used to denote padding so that the output
      *  can be decoded back to its exact size.
      *  If the input data is NULL an error code (EC_IllegalParameter) is returned.
-     ** @param out output stream used for the base64 encoded data
+     ** @param out output stream used for the Base64 encoded data
      *  @param data buffer with binary data to be encoded
      *  @param length length of the input data buffer (in bytes)
      *  @param width maximum number of characters per line in the output stream
@@ -758,7 +759,8 @@ class DCMTK_OFSTD_EXPORT OFStandard
      *      and has to to be freed (using "delete[]") by the caller!  Do not pass a pointer to an
      *      already allocated buffer to this function, the caller does not know the exact size anyway.
      ** @param data Base64 encoded input data (possibly padded with '=' at the end)
-     *  @param result receives pointer to resulting buffer with binary data
+     *  @param result receives pointer to resulting buffer with binary data. Set to NULL if an error
+     *    occurred or the input data is empty.
      ** @return length of the resulting binary data (0 if an error occurred, in this case the buffer
      *    is deleted internally)
      */
@@ -953,11 +955,15 @@ class DCMTK_OFSTD_EXPORT OFStandard
     static OFBool safeMult(T a, T b, T& product)
     {
         assert(!OFnumeric_limits<T>::is_signed);
-        T x = a * b;
-        if (a != 0 && x / a != b) {
+        /* check before multiplying (like safeAdd() does): computing the product first
+         * and dividing afterwards would be undefined behaviour for types that are
+         * narrower than "int", since both operands are then promoted to (signed) "int"
+         * and the product can exceed its range, e.g. 65535 * 65535 for Uint16
+         */
+        if ((a != 0) && (b > (OFnumeric_limits<T>::max)() / a)) {
             return OFFalse;
         }
-        product = x;
+        product = OFstatic_cast(T, a * b);
         return OFTrue;
     }
 
@@ -1180,6 +1186,44 @@ class DCMTK_OFSTD_EXPORT OFStandard
      *  @param fname filename to be sanitized
      */
     static void sanitizeFilename(char *fname);
+
+    /** sanitize a DICOM Application Entity Title for safe use as a
+     *  substitution value in a filename or in a command line that will
+     *  be passed to a shell.
+     *
+     *  This method maps each byte through an allow list: ASCII letters,
+     *  digits, space and the characters '-', '.', ':', '@', '_' are kept
+     *  unchanged; every other byte (including path separators '/' and
+     *  '\\', NUL, control characters, shell metacharacters and bytes
+     *  outside the printable ASCII range) is replaced by '_'.
+     *
+     *  The aetitle string is expected to be already trimmed (i.e. without
+     *  leading or trailing whitespace). Surrounding quotation marks, if
+     *  present, are preserved unchanged (the first and last byte are not
+     *  rewritten) so that quoted AE titles intended for shell command
+     *  substitution remain quoted.
+     *
+     *  This sanitization is sufficient for preventing shell injection in
+     *  contexts where the AE title is substituted into an already quoted
+     *  command-line argument, and for preventing path separators from
+     *  appearing in filenames. It is NOT sufficient to prevent path
+     *  traversal on its own, because the character '.' is kept and the
+     *  sequence "..", which is a path-relative parent reference on most
+     *  operating systems, is therefore not removed. Callers that
+     *  substitute the result into a filesystem path must reject or
+     *  collapse such sequences explicitly.
+     *
+     *  Note: this function is also used by the wlmscpfs application as
+     *  the basis of its filesystem-path-component validation (an AE title
+     *  is accepted only if sanitizeAETitle() would not change it, in
+     *  addition to an explicit dot rejection). Widening the allow list
+     *  below therefore widens the set of AE titles accepted as worklist
+     *  directory names; any change to it must consider that downstream
+     *  effect.
+     *
+     *  @param aetitle Application Entity Title to be sanitized in place.
+     */
+    static void sanitizeAETitle(OFString& aetitle);
 
     /** retrieve the name of the default directory for support data.
      *  On Windows, this method resolves environment variables such as

@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2025, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -292,22 +292,25 @@ makeOFConditionConst(SR_EC_RepresentationNotAvailable,          OFM_dcmsr, 15, O
 makeOFConditionConst(SR_EC_CannotCreateIconImage,               OFM_dcmsr, 16, OF_error, "Cannot create Icon Image");
 makeOFConditionConst(SR_EC_CannotAddContentItem,                OFM_dcmsr, 17, OF_error, "Cannot add Content Item");
 makeOFConditionConst(SR_EC_InvalidConceptName,                  OFM_dcmsr, 18, OF_error, "Invalid Concept Name");
-makeOFConditionConst(SR_EC_CannotInsertSubTree,                 OFM_dcmsr, 19, OF_error, "Cannot insert Subtree");
-makeOFConditionConst(SR_EC_CannotChangeRelationshipType,        OFM_dcmsr, 20, OF_error, "Cannot change Relationship Type");
-makeOFConditionConst(SR_EC_IncompatibleDocumentTree,            OFM_dcmsr, 21, OF_error, "Incompatible Document Tree");
-makeOFConditionConst(SR_EC_ContentItemNotFound,                 OFM_dcmsr, 22, OF_error, "Content Item not found");
-makeOFConditionConst(SR_EC_CannotRemoveSubTree,                 OFM_dcmsr, 23, OF_error, "Cannot remove Subtree");
-makeOFConditionConst(SR_EC_EmptyDocumentTree,                   OFM_dcmsr, 24, OF_error, "Empty Document Tree");
-makeOFConditionConst(SR_EC_InvalidContentItem,                  OFM_dcmsr, 25, OF_error, "Invalid Content Item");
-makeOFConditionConst(SR_EC_CannotUseTemplateIdentification,     OFM_dcmsr, 26, OF_error, "Cannot use Template Identification");
-makeOFConditionConst(SR_EC_NonExtensibleTemplate,               OFM_dcmsr, 27, OF_error, "Non-extensible Template");
-makeOFConditionConst(SR_EC_NonExtensibleContextGroup,           OFM_dcmsr, 28, OF_error, "Non-extensible Context Group");
-makeOFConditionConst(SR_EC_CodedEntryNotInContextGroup,         OFM_dcmsr, 29, OF_error, "Coded Entry not in Context Group");
-makeOFConditionConst(SR_EC_CodedEntryInStandardContextGroup,    OFM_dcmsr, 30, OF_ok,    "Coded Entry in Context Group (Standard)");
-makeOFConditionConst(SR_EC_CodedEntryIsExtensionOfContextGroup, OFM_dcmsr, 31, OF_ok,    "Coded Entry in Context Group (Extension)");
-makeOFConditionConst(SR_EC_ValueSetConstraintViolated,          OFM_dcmsr, 32, OF_error, "Value Set Constraint violated");
-makeOFConditionConst(SR_EC_InvalidTemplateStructure,            OFM_dcmsr, 33, OF_error, "Invalid Template Structure");
-makeOFConditionConst(SR_EC_CannotProcessIncludedTemplates,      OFM_dcmsr, 34, OF_error, "Cannot process Document Tree with included Templates");
+makeOFConditionConst(SR_EC_InvalidRootConceptName,              OFM_dcmsr, 19, OF_error, "Invalid Root Concept Name");
+makeOFConditionConst(SR_EC_UnsupportedRootConceptName,          OFM_dcmsr, 20, OF_error, "Unsupported Root Concept Name");
+makeOFConditionConst(SR_EC_CannotInsertSubTree,                 OFM_dcmsr, 21, OF_error, "Cannot insert Subtree");
+makeOFConditionConst(SR_EC_CannotChangeRelationshipType,        OFM_dcmsr, 22, OF_error, "Cannot change Relationship Type");
+makeOFConditionConst(SR_EC_IncompatibleDocumentTree,            OFM_dcmsr, 23, OF_error, "Incompatible Document Tree");
+makeOFConditionConst(SR_EC_ContentItemNotFound,                 OFM_dcmsr, 24, OF_error, "Content Item not found");
+makeOFConditionConst(SR_EC_CannotRemoveSubTree,                 OFM_dcmsr, 25, OF_error, "Cannot remove Subtree");
+makeOFConditionConst(SR_EC_EmptyDocumentTree,                   OFM_dcmsr, 26, OF_error, "Empty Document Tree");
+makeOFConditionConst(SR_EC_InvalidContentItem,                  OFM_dcmsr, 27, OF_error, "Invalid Content Item");
+makeOFConditionConst(SR_EC_CannotUseTemplateIdentification,     OFM_dcmsr, 28, OF_error, "Cannot use Template Identification");
+makeOFConditionConst(SR_EC_NonExtensibleTemplate,               OFM_dcmsr, 29, OF_error, "Non-extensible Template");
+makeOFConditionConst(SR_EC_NonExtensibleContextGroup,           OFM_dcmsr, 30, OF_error, "Non-extensible Context Group");
+makeOFConditionConst(SR_EC_CodedEntryNotInContextGroup,         OFM_dcmsr, 31, OF_error, "Coded Entry not in Context Group");
+makeOFConditionConst(SR_EC_CodedEntryInStandardContextGroup,    OFM_dcmsr, 32, OF_ok,    "Coded Entry in Context Group (Standard)");
+makeOFConditionConst(SR_EC_CodedEntryIsExtensionOfContextGroup, OFM_dcmsr, 33, OF_ok,    "Coded Entry in Context Group (Extension)");
+makeOFConditionConst(SR_EC_ValueSetConstraintViolated,          OFM_dcmsr, 34, OF_error, "Value Set Constraint violated");
+makeOFConditionConst(SR_EC_InvalidTemplateStructure,            OFM_dcmsr, 35, OF_error, "Invalid Template Structure");
+makeOFConditionConst(SR_EC_CannotProcessIncludedTemplates,      OFM_dcmsr, 36, OF_error, "Cannot process Document Tree with included Templates");
+makeOFConditionConst(SR_EC_MaximumNestingLevelExceeded,         OFM_dcmsr, 37, OF_error, "Maximum nesting level exceeded");
 
 // NOTE:
 // error codes 1000 and above are reserved for the submodule "cmr"
@@ -1242,30 +1245,40 @@ OFCondition DSRTypes::getAndCheckStringValueFromDataset(DcmItem &dataset,
 
 const OFString &DSRTypes::currentDate(OFString &dateString)
 {
-    DcmDate::getCurrentDate(dateString);
+    if (DcmDate::getCurrentDate(dateString).bad())
+        DCMSR_WARN("Cannot determine current date, using \"" << dateString << "\" instead");
     return dateString;
 }
 
 
-const OFString &DSRTypes::currentTime(OFString &timeString)
+const OFString &DSRTypes::currentTime(OFString &timeString,
+                                      const OFBool seconds,
+                                      const OFBool fraction)
 {
-    DcmTime::getCurrentTime(timeString, OFTrue /*seconds*/, OFFalse /*fraction*/);
+    if (DcmTime::getCurrentTime(timeString, seconds, fraction).bad())
+        DCMSR_WARN("Cannot determine current time, using \"" << timeString << "\" instead");
     return timeString;
 }
 
 
-const OFString &DSRTypes::currentDateTime(OFString &dateTimeString)
+const OFString &DSRTypes::currentDateTime(OFString &dateTimeString,
+                                          const OFBool seconds,
+                                          const OFBool fraction,
+                                          const OFBool timeZone)
 {
-    DcmDateTime::getCurrentDateTime(dateTimeString, OFTrue /*seconds*/, OFFalse /*fraction*/, OFFalse /*timeZone*/);
+    if (DcmDateTime::getCurrentDateTime(dateTimeString, seconds, fraction, timeZone).bad())
+        DCMSR_WARN("Cannot determine current date/time, using \"" << dateTimeString << "\" instead");
     return dateTimeString;
 }
 
 
 const OFString &DSRTypes::localTimezone(OFString &timezoneString)
 {
-    OFString dateTimeString;
-    DcmDateTime::getCurrentDateTime(dateTimeString, OFFalse /*seconds*/, OFFalse /*fraction*/, OFTrue /*timeZone*/);
-    timezoneString.assign(dateTimeString.substr(8 /* YYYYMMDD */ + 4 /* HHMM */, 5 /* &ZZZZ */));
+    if (!OFTime::getCurrentTime().getISOFormattedTimeZone(timezoneString, OFFalse /*showDelimiter*/))
+    {
+        DCMSR_WARN("Cannot determine local timezone, using \"+0000\" (UTC) instead");
+        timezoneString.assign("+0000");
+    }
     return timezoneString;
 }
 
@@ -1273,7 +1286,11 @@ const OFString &DSRTypes::localTimezone(OFString &timezoneString)
 const OFString &DSRTypes::dicomToReadableDate(const OFString &dicomDate,
                                               OFString &readableDate)
 {
-    DcmDate::getISOFormattedDateFromString(dicomDate, readableDate);
+    if (DcmDate::getISOFormattedDateFromString(dicomDate, readableDate).bad())
+    {
+        DCMSR_WARN("Cannot convert DICOM date value \"" << dicomDate << "\" to readable format");
+        readableDate = dicomDate;
+    }
     return readableDate;
 }
 
@@ -1281,7 +1298,11 @@ const OFString &DSRTypes::dicomToReadableDate(const OFString &dicomDate,
 const OFString &DSRTypes::dicomToReadableTime(const OFString &dicomTime,
                                               OFString &readableTime)
 {
-    DcmTime::getISOFormattedTimeFromString(dicomTime, readableTime, OFTrue /*seconds*/, OFFalse /*fraction*/, OFFalse /*createMissingPart*/);
+    if (DcmTime::getISOFormattedTimeFromString(dicomTime, readableTime, OFTrue /*seconds*/, OFTrue /*fraction*/, OFFalse /*createMissingPart*/).bad())
+    {
+        DCMSR_WARN("Cannot convert DICOM time value \"" << dicomTime << "\" to readable format");
+        readableTime = dicomTime;
+    }
     return readableTime;
 }
 
@@ -1289,7 +1310,12 @@ const OFString &DSRTypes::dicomToReadableTime(const OFString &dicomTime,
 const OFString &DSRTypes::dicomToReadableDateTime(const OFString &dicomDateTime,
                                                   OFString &readableDateTime)
 {
-    DcmDateTime::getISOFormattedDateTimeFromString(dicomDateTime, readableDateTime, OFTrue /*seconds*/, OFFalse /*fraction*/, OFTrue /*timeZone*/, OFFalse /*createMissingPart*/);
+    if (DcmDateTime::getISOFormattedDateTimeFromString(dicomDateTime, readableDateTime, OFTrue /*seconds*/, OFTrue /*fraction*/,
+        OFTrue /*timeZone*/, OFFalse /*createMissingPart*/, " " /*dateTimeSeparator*/, " " /*timeZoneSeparator*/).bad())
+    {
+        DCMSR_WARN("Cannot convert DICOM date/time value \"" << dicomDateTime << "\" to readable format");
+        readableDateTime = dicomDateTime;
+    }
     return readableDateTime;
 }
 
@@ -1298,7 +1324,10 @@ const OFString &DSRTypes::dicomToReadablePersonName(const OFString &dicomPersonN
                                                     OFString &readablePersonName)
 {
     if (DcmPersonName::getFormattedNameFromString(dicomPersonName, readablePersonName, 0 /*componentGroup*/).bad())
+    {
+        DCMSR_WARN("Cannot convert DICOM person name value \"" << dicomPersonName << "\" to readable format");
         readablePersonName = dicomPersonName;
+    }
     return readablePersonName;
 }
 

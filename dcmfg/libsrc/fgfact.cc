@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2021, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -50,8 +50,10 @@
 #include "dcmtk/dcmfg/fgtemporalposition.h"
 #include "dcmtk/dcmfg/fgusimagedescription.h"
 #include "dcmtk/dcmiod/iodutil.h"
+#include "dcmtk/ofstd/ofthread.h"
 
 FGFactory* FGFactory::m_Instance = NULL;
+OFMutex FGFactory::m_InstanceMutex;
 
 FGFactory::FGFactory()
 {
@@ -60,9 +62,15 @@ FGFactory::FGFactory()
 
 FGFactory& FGFactory::instance()
 {
+    // Double-checked locking for C++98 thread-safe singleton initialization
     if (m_Instance == NULL)
     {
-        m_Instance = new FGFactory();
+        m_InstanceMutex.lock();
+        if (m_Instance == NULL)
+        {
+            m_Instance = new FGFactory();
+        }
+        m_InstanceMutex.unlock();
     }
     return *m_Instance;
 }

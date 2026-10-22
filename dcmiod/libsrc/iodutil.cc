@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -33,6 +33,7 @@
 #include "dcmtk/dcmdata/dcuid.h"
 #include "dcmtk/dcmdata/dcvrda.h"
 #include "dcmtk/dcmdata/dcvrtm.h"
+#include "dcmtk/ofstd/ofstd.h"
 #include "dcmtk/ofstd/ofstring.h"
 
 // --- static helpers ---
@@ -150,6 +151,17 @@ DcmIODUtil::addElementToDataset(OFCondition& result, DcmItem& dataset, DcmElemen
     {
         if (rule != NULL)
         {
+            // A rule that is not active on writing is skipped: the related
+            // attribute is not written (and, for type 1/2, its absence is not
+            // treated as an error). We own delem, so free it here.
+            if (!rule->isActiveOnWrite())
+            {
+                DCMIOD_DEBUG(DcmTag(rule->getTagKey()).getTagName()
+                             << " " << rule->getTagKey() << " not written to " << rule->getModule()
+                             << " (rule inactive on write)");
+                delete delem;
+                return EC_Normal;
+            }
             // Create empty type 2 element if required
             OFString type = rule->getType();
             if (delem == NULL)
@@ -257,14 +269,10 @@ OFCondition DcmIODUtil::checkElementValue(const DcmElement* delem,
                                           const char* moduleName,
                                           const dcmtk::log4cplus::LogLevel logLevel)
 {
-    OFCondition result     = EC_Normal;
-    const OFString tagName = DcmTag(tagKey).getTagName();
-    const OFString module  = (moduleName == NULL) ? "IOD" : moduleName;
-    OFOStringStream error;
+    OFCondition result = EC_Normal;
     /* NB: type 1C and 2C cannot be checked, assuming to be optional */
     if (((type == "1") || (type == "2")) && searchCond.bad())
     {
-        error << tagName << " " << tagKey << " absent in " << module << " (type " << type << ")";
         result = IOD_EC_MissingAttribute;
     }
     else if ((delem == NULL)
@@ -275,7 +283,6 @@ OFCondition DcmIODUtil::checkElementValue(const DcmElement* delem,
         /* however, type 1C should never be present with empty value */
         if (((type == "1") || (type == "1C")) && searchCond.good())
         {
-            error << tagName << " " << tagKey << " empty in " << module << " (type " << type << ")";
             result = EC_MissingValue;
         }
     }
@@ -284,7 +291,30 @@ OFCondition DcmIODUtil::checkElementValue(const DcmElement* delem,
         result = OFconst_cast(DcmElement*, delem)
                      ->checkValue(vm, OFTrue /*oldFormat*/); // cast away constness of delem; value modification can
                                                              // happen (eg. to remove padding)
-        if (result == EC_InvalidCharacter)
+        /* For unknown errors, reset to normal - only specific errors are reported */
+        if (result.bad() && result != EC_InvalidCharacter && result != EC_ValueRepresentationViolated
+            && result != EC_ValueMultiplicityViolated && result != EC_MaximumLengthViolated)
+        {
+            result = EC_Normal;
+        }
+    }
+
+    /* Only compute tag name and build error message if there was an error */
+    if (result.bad())
+    {
+        const OFString tagName = DcmTag(tagKey).getTagName();
+        const OFString module  = (moduleName == NULL) ? "IOD" : moduleName;
+        OFOStringStream error;
+
+        if (result == IOD_EC_MissingAttribute)
+        {
+            error << tagName << " " << tagKey << " absent in " << module << " (type " << type << ")";
+        }
+        else if (result == EC_MissingValue)
+        {
+            error << tagName << " " << tagKey << " empty in " << module << " (type " << type << ")";
+        }
+        else if (result == EC_InvalidCharacter)
         {
             error << tagName << " " << tagKey << " contains invalid character(s) in " << module;
         }
@@ -301,41 +331,37 @@ OFCondition DcmIODUtil::checkElementValue(const DcmElement* delem,
         {
             error << tagName << " " << tagKey << " violates maximum VR length in " << module;
         }
-        else if (result.bad())
+
+        OFSTRINGSTREAM_GETSTR(error, tmpString)
+        if (strlen(tmpString) > 0)
         {
-            error << "INTERNAL ERROR while checking value of " << tagName << " " << tagKey << " in " << module;
-            result = EC_Normal;
+            switch (logLevel)
+            {
+                case dcmtk::log4cplus::TRACE_LOG_LEVEL:
+                    DCMIOD_TRACE(tmpString);
+                    break;
+                case dcmtk::log4cplus::DEBUG_LOG_LEVEL:
+                    DCMIOD_DEBUG(tmpString);
+                    break;
+                case dcmtk::log4cplus::WARN_LOG_LEVEL:
+                    DCMIOD_WARN(tmpString);
+                    break;
+                case dcmtk::log4cplus::INFO_LOG_LEVEL:
+                    DCMIOD_INFO(tmpString);
+                    break;
+                case dcmtk::log4cplus::ERROR_LOG_LEVEL:
+                    DCMIOD_ERROR(tmpString);
+                    break;
+                case dcmtk::log4cplus::FATAL_LOG_LEVEL:
+                    DCMIOD_FATAL(tmpString);
+                    break;
+                default:
+                    DCMIOD_WARN(tmpString);
+                    ;
+            }
         }
+        OFSTRINGSTREAM_FREESTR(tmpString)
     }
-    OFSTRINGSTREAM_GETSTR(error, tmpString)
-    if (strlen(tmpString) > 0)
-    {
-        switch (logLevel)
-        {
-            case dcmtk::log4cplus::TRACE_LOG_LEVEL:
-                DCMIOD_TRACE(tmpString);
-                break;
-            case dcmtk::log4cplus::DEBUG_LOG_LEVEL:
-                DCMIOD_DEBUG(tmpString);
-                break;
-            case dcmtk::log4cplus::WARN_LOG_LEVEL:
-                DCMIOD_WARN(tmpString);
-                break;
-            case dcmtk::log4cplus::INFO_LOG_LEVEL:
-                DCMIOD_INFO(tmpString);
-                break;
-            case dcmtk::log4cplus::ERROR_LOG_LEVEL:
-                DCMIOD_ERROR(tmpString);
-                break;
-            case dcmtk::log4cplus::FATAL_LOG_LEVEL:
-                DCMIOD_FATAL(tmpString);
-                break;
-            default:
-                DCMIOD_WARN(tmpString);
-                ;
-        }
-    }
-    OFSTRINGSTREAM_FREESTR(tmpString)
     return result;
 }
 
@@ -688,6 +714,7 @@ Uint32 DcmIODUtil::limitMaxFrames(const size_t numFramesPresent, const OFString&
 }
 
 OFCondition DcmIODUtil::extractBinaryFrames(Uint8* pixData,
+                                            const size_t pixDataLen,
                                             const size_t numFrames,
                                             const size_t bitsPerFrame,
                                             OFVector<DcmIODTypes::FrameBase*>& results)
@@ -706,6 +733,23 @@ OFCondition DcmIODUtil::extractBinaryFrames(Uint8* pixData,
     {
         DCMIOD_ERROR("Cannot extract frames with 0 bits per frame");
         return EC_IllegalParameter;
+    }
+    // Make sure the buffer is large enough for all requested frames before
+    // copying anything, otherwise the extraction below would read past its end.
+    // Frames are packed as a continuous bit stream, so the buffer must hold at
+    // least ceil(numFrames * bitsPerFrame / 8) bytes.
+    size_t bitsRequired = 0;
+    if (!OFStandard::safeMult(numFrames, bitsPerFrame, bitsRequired))
+    {
+        DCMIOD_ERROR("Cannot extract frames: number of frames times bits per frame exceeds the addressable range");
+        return IOD_EC_InvalidPixelData;
+    }
+    const size_t bytesRequired = bitsRequired / 8 + ((bitsRequired % 8 != 0) ? 1 : 0);
+    if (bytesRequired > pixDataLen)
+    {
+        DCMIOD_ERROR("Cannot extract " << numFrames << " frames of " << bitsPerFrame << " bits: Pixel Data holds "
+                                       << pixDataLen << " bytes but " << bytesRequired << " bytes are required");
+        return IOD_EC_InvalidPixelData;
     }
     // pixData contains all frames in a single buffer. Each frame is bitsPerFrame bits long.
     // We need to extract each frame into a separate buffer (results vector). Every frame
@@ -747,47 +791,58 @@ OFCondition DcmIODUtil::extractBinaryFrames(Uint8* pixData,
         results.push_back(frame);
     }
 
-    // Extract frames
-    size_t bitsLeftInInputByte = 8;
-    size_t bitsLeftInTargetByte = 8;
-    size_t bitsLeftInFrame = bitsPerFrame;
-    size_t inputByteIndex = 0;
-    size_t targetFrameIndex = 0;
-    size_t targetByteIndex = 0;
-    // Iterate over bits in input data (byte per byte, from left to right, and within byte from right to left)
-    for (size_t i = 0; i < numFrames * bitsPerFrame; i++)
+    // Extract frames.
+    // Fast path: when bitsPerFrame is a multiple of 8, every frame starts on
+    // a byte boundary in the input, so we can memcpy each frame directly.
+    if (bitsPerFrame % 8 == 0)
     {
-        // Get current bit
-        Uint8 bit = (pixData[inputByteIndex] >> (8 - bitsLeftInInputByte)) & 0x01;
-
-        // Set bit in current frame to to position calculated from bitsLeftInTargetByte
-        OFstatic_cast(Uint8*, results[targetFrameIndex]->getPixelData())[targetByteIndex] |= (bit << (8 - bitsLeftInTargetByte));
-
-        // Move to next bit
-        bitsLeftInInputByte--;
-        bitsLeftInFrame--;
-        bitsLeftInTargetByte--;
-
-        // If we have processed all bits in the current byte, move to next byte
-        if (bitsLeftInInputByte == 0)
+        for (size_t f = 0; f < numFrames; f++)
         {
-            bitsLeftInInputByte = 8;
-            inputByteIndex++;
+            memcpy(results[f]->getPixelData(), pixData + f * bytesPerFrame, bytesPerFrame);
         }
-        // If we have processed all bits in the current frame, move to next frame,
-        // and also start new target frame
-        if (bitsLeftInFrame == 0)
+    }
+    else
+    {
+        // Slow path: frames are not byte-aligned, extract bit by bit.
+        size_t bitsLeftInInputByte = 8;
+        size_t bitsLeftInTargetByte = 8;
+        size_t bitsLeftInFrame = bitsPerFrame;
+        size_t inputByteIndex = 0;
+        size_t targetFrameIndex = 0;
+        size_t targetByteIndex = 0;
+        Uint8* targetData = OFstatic_cast(Uint8*, results[0]->getPixelData());
+        for (size_t i = 0; i < numFrames * bitsPerFrame; i++)
         {
-            bitsLeftInFrame = bitsPerFrame;
-            targetFrameIndex++;
-            targetByteIndex = 0;
-            bitsLeftInTargetByte = 8;
-        }
-        // Advance to next target byte if we have filled the current one
-        if (bitsLeftInTargetByte == 0)
-        {
-            bitsLeftInTargetByte = 8;
-            targetByteIndex++;
+            // Get current bit from input
+            Uint8 bit = (pixData[inputByteIndex] >> (8 - bitsLeftInInputByte)) & 0x01;
+
+            // Set bit in current frame
+            targetData[targetByteIndex] |= (bit << (8 - bitsLeftInTargetByte));
+
+            // Move to next bit
+            bitsLeftInInputByte--;
+            bitsLeftInFrame--;
+            bitsLeftInTargetByte--;
+
+            if (bitsLeftInInputByte == 0)
+            {
+                bitsLeftInInputByte = 8;
+                inputByteIndex++;
+            }
+            if (bitsLeftInFrame == 0)
+            {
+                bitsLeftInFrame = bitsPerFrame;
+                targetFrameIndex++;
+                targetByteIndex = 0;
+                bitsLeftInTargetByte = 8;
+                if (targetFrameIndex < numFrames)
+                    targetData = OFstatic_cast(Uint8*, results[targetFrameIndex]->getPixelData());
+            }
+            if (bitsLeftInTargetByte == 0)
+            {
+                bitsLeftInTargetByte = 8;
+                targetByteIndex++;
+            }
         }
     }
     return EC_Normal;

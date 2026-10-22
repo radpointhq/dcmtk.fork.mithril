@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2025, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -29,6 +29,10 @@
 #include "dcmtk/dcmsr/dsrtree.h"
 #include "dcmtk/dcmsr/dsrcodvl.h"
 
+/// maximum nesting level supported when reading from XML
+#ifndef DCMSR_MAX_XML_NESTING_LEVEL
+#define DCMSR_MAX_XML_NESTING_LEVEL 128
+#endif
 
 // include this file in doxygen documentation
 
@@ -200,12 +204,14 @@ class DCMTK_DCMSR_EXPORT DSRDocumentTreeNode
      *  @param  cursor        cursor pointing to the starting node
      *  @param  documentType  type of the document to be read (used for debug output only)
      *  @param  flags         flag used to customize the reading process (see DSRTypes::XF_xxx)
+     *  @param  depth         current recursion depth (optional, see DCMSR_MAX_XML_NESTING_LEVEL)
      ** @return status, EC_Normal if successful, an error code otherwise
      */
     virtual OFCondition readXML(const DSRXMLDocument &doc,
                                 DSRXMLCursor cursor,
                                 const E_DocumentType documentType,
-                                const size_t flags);
+                                const size_t flags,
+                                const size_t depth = 0);
 
     /** write content item in XML format
      ** @param  stream  output stream to which the XML document is written
@@ -688,12 +694,14 @@ class DCMTK_DCMSR_EXPORT DSRDocumentTreeNode
                                                DcmStack *markedItems);
 
     /** read document content macro
-     ** @param  dataset    DICOM dataset from which the data should be read
-     *  @param  posString  location of the current content item (e.g.\ "1.2.3")
-     *  @param  flags      flag used to customize the reading process (see DSRTypes::RF_xxx)
+     ** @param  dataset            DICOM dataset from which the data should be read
+     *  @param  constraintChecker  checks various constraints of the associated IOD
+     *  @param  posString          location of the current content item (e.g.\ "1.2.3")
+     *  @param  flags              flag used to customize the reading process (see DSRTypes::RF_xxx)
      ** @return status, EC_Normal if successful, an error code otherwise
      */
     OFCondition readDocumentContentMacro(DcmItem &dataset,
+                                         const DSRIODConstraintChecker *constraintChecker,
                                          const OFString &posString,
                                          const size_t flags);
 

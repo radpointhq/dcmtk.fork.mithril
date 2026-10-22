@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2017-2023, OFFIS e.V.
+ *  Copyright (C) 2017-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -650,13 +650,13 @@ OFTEST_FLAGS(dcmnet_scp_role_selection, EF_Slow)
 }
 
 /** Test SCP that supports N-CREATE requests */
-struct TestSCPWithNCreateSupport : TestSCP
+struct TestSCPWithMPPSSupport : TestSCP
 {
-    TestSCPWithNCreateSupport()
+    TestSCPWithMPPSSupport()
         : TestSCP()
     {
         DcmSCPConfig& config = getConfig();
-        config.setAETitle("NCREATE_SCP");
+        config.setAETitle("MPPS_SCP");
         config.setConnectionBlockingMode(DUL_NOBLOCK);
         config.setConnectionTimeout(10);
         config.setHostLookupEnabled(OFFalse);
@@ -666,9 +666,10 @@ struct TestSCPWithNCreateSupport : TestSCP
         OFList<OFString> xfers;
         xfers.push_back(UID_LittleEndianImplicitTransferSyntax);
         OFCHECK(getConfig().addPresentationContext(UID_ModalityPerformedProcedureStepSOPClass, xfers).good());
+        OFCHECK(getConfig().addPresentationContext(UID_ModalityPerformedProcedureStepRetrieveSOPClass, xfers).good());
     }
 
-    virtual ~TestSCPWithNCreateSupport()
+    virtual ~TestSCPWithMPPSSupport()
     {
     }
 
@@ -680,6 +681,12 @@ struct TestSCPWithNCreateSupport : TestSCP
 
         if (incomingMsg->CommandField == DIMSE_N_SET_RQ)
             return OnNSETRequest(incomingMsg->msg.NSetRQ, presInfo.presentationContextID);
+
+        if (incomingMsg->CommandField == DIMSE_N_GET_RQ)
+            return OnNGETRequest(incomingMsg->msg.NGetRQ, presInfo.presentationContextID);
+
+        if (incomingMsg->CommandField == DIMSE_N_ACTION_RQ)
+            return OnNACTIONRequest(incomingMsg->msg.NActionRQ, presInfo.presentationContextID);
 
         return DcmSCP::handleIncomingCommand(incomingMsg, presInfo);
     }
@@ -769,7 +776,7 @@ struct TestSCPWithNCreateSupport : TestSCP
 
         // Send back response
         T_DIMSE_Message response;
-        memset((char*)&response, 0, sizeof(response));
+        memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
         T_DIMSE_N_CreateRSP& createResponse         = response.msg.NCreateRSP;
         response.CommandField                       = DIMSE_N_CREATE_RSP;
         createResponse.MessageIDBeingRespondedTo    = messageID;
@@ -867,7 +874,7 @@ struct TestSCPWithNCreateSupport : TestSCP
 
         // Send back response
         T_DIMSE_Message response;
-        memset((char*)&response, 0, sizeof(response));
+        memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
         T_DIMSE_N_SetRSP& setResponse           = response.msg.NSetRSP;
         response.CommandField                   = DIMSE_N_SET_RSP;
         setResponse.MessageIDBeingRespondedTo   = messageID;
@@ -900,6 +907,93 @@ struct TestSCPWithNCreateSupport : TestSCP
         return EC_Normal;
     }
 
+    /** Called when client sends an N-GET request */
+    OFCondition OnNGETRequest(T_DIMSE_N_GetRQ& getRq, const T_ASC_PresentationContextID presID)
+    {
+        OFList<DcmTagKey> requestedTags;
+        OFCondition result = receiveNGETRequest(getRq, presID, requestedTags);
+        if (result.bad())
+            return result;
+
+        const OFString requestedSOPClassUID    = getRq.RequestedSOPClassUID;
+        const OFString requestedSOPInstanceUID = getRq.RequestedSOPInstanceUID;
+        Uint16 responseStatus = STATUS_N_Success;
+        DcmDataset filteredDataset;
+
+        const OFMap<OFString, DcmDataset>::iterator instanceIt = m_managedSopInstances.find(requestedSOPInstanceUID);
+        if (instanceIt == m_managedSopInstances.end())
+        {
+            responseStatus = STATUS_N_InvalidSOPInstance;
+        }
+        else if (requestedTags.empty())
+        {
+            // No Attribute Identifier List specified; all attributes are assumed (PS3.7 Section 10.1.2.1.5)
+            filteredDataset = instanceIt->second;
+        }
+        else
+        {
+            // Return only the specifically requested attributes
+            OFListConstIterator(DcmTagKey) tagIt = requestedTags.begin();
+            for (; tagIt != requestedTags.end(); ++tagIt)
+            {
+                DcmElement* elem = OFnullptr;
+                if (instanceIt->second.findAndGetElement(*tagIt, elem).good())
+                    filteredDataset.insert(dynamic_cast<DcmElement*>(elem->clone()));
+            }
+        }
+
+        DcmDataset* responseDataset = (responseStatus == STATUS_N_Success) ? &filteredDataset : OFnullptr;
+        return sendNGETResponse(presID, getRq.MessageID, requestedSOPClassUID, requestedSOPInstanceUID,
+                                responseStatus, responseDataset);
+    }
+
+    /** Handle an N-ACTION request sent by the SCU (dispatched from
+     *  handleIncomingCommand()).
+     *
+     *  This is a deliberately minimal N-ACTION implementation whose only purpose
+     *  is to give the DcmSCU N-ACTION code path (DcmSCU::sendACTIONRequest(), and
+     *  in particular its dedicated Action Information / Action Reply loggers) a
+     *  real peer to talk to. It does not implement any specific SOP class action
+     *  semantics. The handler:
+     *   -# receives the request together with its optional Action Information
+     *      dataset via receiveACTIONRequest() (the dataset is accepted and then
+     *      simply discarded; the Action Type ID is not evaluated),
+     *   -# looks up the addressed SOP instance among the instances that were
+     *      previously created on this SCP via N-CREATE (m_managedSopInstances),
+     *   -# answers with STATUS_N_Success for a managed instance or
+     *      STATUS_N_InvalidSOPInstance for an unknown one.
+     *  The N-ACTION response is sent via sendACTIONResponse() and never carries
+     *  an Action Reply dataset.
+     *  @param  actionRq The received N-ACTION request command set.
+     *  @param  presID   Presentation context ID the request arrived on.
+     *  @return EC_Normal if the response was sent successfully, an error
+     *          code otherwise (e.g. if receiving the request failed).
+     */
+    OFCondition OnNACTIONRequest(T_DIMSE_N_ActionRQ& actionRq, const T_ASC_PresentationContextID presID)
+    {
+        // Receive the command set plus the optional Action Information dataset.
+        DcmDataset* reqDataset = OFnullptr;
+        Uint16 actionTypeID = 0;
+        OFCondition result = receiveACTIONRequest(actionRq, presID, reqDataset, actionTypeID);
+        if (result.bad())
+            return result;
+
+        const OFString requestedSOPClassUID    = actionRq.RequestedSOPClassUID;
+        const OFString requestedSOPInstanceUID = actionRq.RequestedSOPInstanceUID;
+        Uint16 responseStatus = STATUS_N_Success;
+
+        // Only accept the action for an instance that is actually managed,
+        // i.e. one that was created earlier in the same association via N-CREATE.
+        if (m_managedSopInstances.find(requestedSOPInstanceUID) == m_managedSopInstances.end())
+            responseStatus = STATUS_N_InvalidSOPInstance;
+
+        // The Action Information is not needed any further in this test SCP.
+        delete reqDataset;
+        // Acknowledge the action; an N-ACTION response carries no Action Reply here.
+        return sendACTIONResponse(presID, actionRq.MessageID, requestedSOPClassUID,
+                                  requestedSOPInstanceUID, responseStatus);
+    }
+
     OFMap<OFString, DcmDataset> m_managedSopInstances;
     Uint16 m_portNum;
 };
@@ -915,7 +1009,8 @@ struct NCREATEFixture
         reqDataset(),
         createdInstance(NULL),
         presIDVerification(0),
-        presIDMpps(0)
+        presIDMpps(0),
+        presIDRetrieve(0)
     {
         scp.start();
         OFCHECK_MSG(scp.m_listen_result == EC_NotYetImplemented, OFString("SCP does not seem to listen and returns: ") + scp.m_listen_result.text());
@@ -931,13 +1026,16 @@ struct NCREATEFixture
         xfers.push_back(UID_LittleEndianImplicitTransferSyntax);
         OFCHECK(mppsSCU.addPresentationContext(UID_VerificationSOPClass, xfers).good());
         OFCHECK(mppsSCU.addPresentationContext(UID_ModalityPerformedProcedureStepSOPClass, xfers).good());
+        OFCHECK(mppsSCU.addPresentationContext(UID_ModalityPerformedProcedureStepRetrieveSOPClass, xfers).good());
         OFCondition result;
         OFCHECK_MSG((result = mppsSCU.initNetwork()).good(), result.text());
         OFCHECK_MSG((result = mppsSCU.negotiateAssociation()).good(), result.text());
         presIDVerification = mppsSCU.findPresentationContextID(UID_VerificationSOPClass, UID_LittleEndianImplicitTransferSyntax);
         presIDMpps = mppsSCU.findPresentationContextID(UID_ModalityPerformedProcedureStepSOPClass, UID_LittleEndianImplicitTransferSyntax);
+        presIDRetrieve = mppsSCU.findPresentationContextID(UID_ModalityPerformedProcedureStepRetrieveSOPClass, UID_LittleEndianImplicitTransferSyntax);
         OFCHECK(presIDVerification != 0);
         OFCHECK(presIDMpps != 0);
+        OFCHECK(presIDRetrieve != 0);
     }
 
     virtual ~NCREATEFixture()
@@ -948,7 +1046,7 @@ struct NCREATEFixture
         OFStandard::forceSleep(2);
     }
 
-    TestSCPWithNCreateSupport scp;
+    TestSCPWithMPPSSupport scp;
     DcmSCU mppsSCU;
 
     OFString affectedSopInstanceUid;
@@ -956,6 +1054,7 @@ struct NCREATEFixture
     DcmDataset* createdInstance;
     T_ASC_PresentationContextID presIDVerification;
     T_ASC_PresentationContextID presIDMpps;
+    T_ASC_PresentationContextID presIDRetrieve;
 };
 
 OFTEST_FLAGS(dcmnet_scu_sendNCREATERequest_succeeds_when_optional_createdinstance_is_null, EF_Slow)
@@ -1110,6 +1209,442 @@ OFTEST_FLAGS(dcmnet_scu_sendNSETRequest_succeeds_and_sets_responsestatuscode_fro
 
     fixture.scp.m_set_stop_after_assoc = OFTrue;
     OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+
+/// Fixture for N-GET tests: Re-use N-CREATE fixture to pre-created managed instance on the SCP.
+struct NGETFixture : NCREATEFixture
+{
+    NGETFixture()
+        : retrievedAttributes(OFnullptr)
+    {
+        mppsSCU.Logger.setEnabled(DcmSCU::TLogger::LOGGER_N_GET_RQ_IDENTIFIER_LIST, OFTrue);
+        mppsSCU.Logger.setEnabled(DcmSCU::TLogger::LOGGER_N_GET_RSP_DATASET, OFTrue);
+
+        // Pre-create an instance so the SCP has something to retrieve
+        Uint16 rspStatusCode = 0;
+        OFCondition result = mppsSCU.sendNCREATERequest(presIDRetrieve, affectedSopInstanceUid,
+                                                        &reqDataset, createdInstance, rspStatusCode);
+        OFCHECK_MSG(result.good(), result.text());
+        OFCHECK(rspStatusCode == STATUS_N_Success);
+    }
+
+    ~NGETFixture()
+    {
+        delete retrievedAttributes;
+    }
+
+    DcmDataset* retrievedAttributes;
+};
+
+OFTEST_FLAGS(dcmnet_scu_sendNGETRequest_fails_when_requestedsopinstance_is_empty, EF_Slow)
+{
+    NGETFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    OFList<DcmTagKey> tagList;
+    OFCondition result = fixture.mppsSCU.sendNGETRequest(fixture.presIDRetrieve, "", tagList,
+                                                         fixture.retrievedAttributes, rspStatusCode);
+    OFCHECK(result.bad());
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+OFTEST_FLAGS(dcmnet_scu_sendNGETRequest_retrieves_all_attributes_when_list_is_empty, EF_Slow)
+{
+    NGETFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    OFList<DcmTagKey> tagList; // no Attribute Identifier List sent; all attributes assumed per PS3.7 10.1.2.1.5
+    OFCondition result = fixture.mppsSCU.sendNGETRequest(fixture.presIDRetrieve, fixture.affectedSopInstanceUid,
+                                                         tagList, fixture.retrievedAttributes, rspStatusCode);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK_MSG(rspStatusCode == STATUS_N_Success, OFString("Status code is: ") + DU_ngetStatusString(rspStatusCode));
+    OFCHECK(fixture.retrievedAttributes != OFnullptr);
+
+    OFString retrievedSopInstanceUid;
+    OFCHECK(fixture.retrievedAttributes->findAndGetOFString(DCM_SOPInstanceUID, retrievedSopInstanceUid).good());
+    OFCHECK(retrievedSopInstanceUid == fixture.affectedSopInstanceUid);
+
+    OFString retrievedStudyUid;
+    OFCHECK(fixture.retrievedAttributes->findAndGetOFString(DCM_StudyInstanceUID, retrievedStudyUid).good());
+    OFCHECK(retrievedStudyUid == "3.3.3.3");
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+OFTEST_FLAGS(dcmnet_scu_sendNGETRequest_retrieves_only_requested_attributes, EF_Slow)
+{
+    NGETFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    OFList<DcmTagKey> tagList;
+    tagList.push_back(DCM_StudyInstanceUID); // request only this attribute
+
+    OFCondition result = fixture.mppsSCU.sendNGETRequest(fixture.presIDRetrieve, fixture.affectedSopInstanceUid,
+                                                         tagList, fixture.retrievedAttributes, rspStatusCode);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK_MSG(rspStatusCode == STATUS_N_Success, OFString("Status code is: ") + DU_ngetStatusString(rspStatusCode));
+    OFCHECK(fixture.retrievedAttributes != OFnullptr);
+
+    // The requested attribute must be present
+    OFString retrievedStudyUid;
+    OFCHECK(fixture.retrievedAttributes->findAndGetOFString(DCM_StudyInstanceUID, retrievedStudyUid).good());
+    OFCHECK(retrievedStudyUid == "3.3.3.3");
+
+    // An attribute that was not requested must be absent
+    OFString retrievedSopInstanceUid;
+    OFCHECK(fixture.retrievedAttributes->findAndGetOFString(DCM_SOPInstanceUID, retrievedSopInstanceUid).bad());
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+OFTEST_FLAGS(dcmnet_scu_sendNGETRequest_sets_error_status_for_nonexistent_instance, EF_Slow)
+{
+    NGETFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    OFList<DcmTagKey> tagList;
+    OFCondition result = fixture.mppsSCU.sendNGETRequest(fixture.presIDMpps, "9.9.9.9",
+                                                         tagList, fixture.retrievedAttributes, rspStatusCode);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK(rspStatusCode == STATUS_N_InvalidSOPInstance);
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+
+/** Fixture for the N-ACTION tests.
+ *
+ *  Builds on NCREATEFixture, which already opens the association and negotiates
+ *  the Verification and MPPS presentation contexts. On top of that it prepares
+ *  everything the N-ACTION tests need:
+ *   -# It enables the two dedicated DcmSCU loggers for the N-ACTION Action
+ *      Information (request) and Action Reply (response). LOGGER_N_ACTION_RQ_*
+ *      is on by default, but both are set explicitly so the new logging code in
+ *      DcmSCU::sendACTIONRequest() is always exercised when the tests run.
+ *   -# It pre-creates a managed SOP instance on the SCP via N-CREATE, so that an
+ *      N-ACTION addressed to that instance ("2.2.2.2") is accepted while any
+ *      other instance UID is rejected.
+ *   -# It prepares a small Action Information dataset (Modality) that is passed
+ *      to sendACTIONRequest() and therefore both logged by the SCU and
+ *      transmitted to the SCP.
+ */
+struct NACTIONFixture : NCREATEFixture
+{
+    NACTIONFixture()
+    {
+        // (1) Enable the dedicated loggers for the N-ACTION Action Information / Action Reply.
+        mppsSCU.Logger.setEnabled(DcmSCU::TLogger::LOGGER_N_ACTION_RQ_ACTION_INFORMATION, OFTrue);
+        mppsSCU.Logger.setEnabled(DcmSCU::TLogger::LOGGER_N_ACTION_RSP_ACTION_REPLY, OFTrue);
+
+        // (2) Pre-create an instance so the SCP has a managed instance to act on.
+        Uint16 rspStatusCode = 0;
+        OFCondition result = mppsSCU.sendNCREATERequest(presIDRetrieve, affectedSopInstanceUid,
+                                                        &reqDataset, createdInstance, rspStatusCode);
+        OFCHECK_MSG(result.good(), result.text());
+        OFCHECK(rspStatusCode == STATUS_N_Success);
+
+        // (3) Action Information dataset that is logged and transmitted with the request.
+        actionInformation.putAndInsertOFStringArray(DCM_Modality, "US");
+    }
+
+    /// Action Information sent with every N-ACTION request in these tests.
+    DcmDataset actionInformation;
+};
+
+/** Local input validation: sendACTIONRequest() must reject an empty Requested
+ *  SOP Instance UID before anything is sent on the wire. The call is expected to
+ *  return an error (DIMSE_NULLKEY) and the SCP is never contacted, so no status
+ *  code is produced. This exercises the early-exit guard in sendACTIONRequest().
+ */
+OFTEST_FLAGS(dcmnet_scu_sendACTIONRequest_fails_when_requestedsopinstance_is_empty, EF_Slow)
+{
+    NACTIONFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    // Empty SOP Instance UID -> rejected locally, request never leaves the SCU.
+    OFCondition result = fixture.mppsSCU.sendACTIONRequest(fixture.presIDMpps, "", 1,
+                                                           &fixture.actionInformation, rspStatusCode);
+    OFCHECK(result.bad());
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+/** Happy path / full N-ACTION round trip against the managed instance
+ *  ("2.2.2.2") that the fixture created. The request and its Action Information
+ *  dataset are sent to the SCP (this is the case that drives the new SCU Action
+ *  Information logger), the SCP accepts the instance, and the SCU receives a
+ *  STATUS_N_Success response. Verifies both the transport (result.good()) and
+ *  the DIMSE status code returned by the SCP.
+ */
+OFTEST_FLAGS(dcmnet_scu_sendACTIONRequest_succeeds_when_scp_has_instance, EF_Slow)
+{
+    NACTIONFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    // Address the instance the fixture created -> SCP answers with success.
+    OFCondition result = fixture.mppsSCU.sendACTIONRequest(fixture.presIDMpps, fixture.affectedSopInstanceUid, 1,
+                                                           &fixture.actionInformation, rspStatusCode);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK_MSG(rspStatusCode == STATUS_N_Success, OFString("Status code is: ") + DU_nactionStatusString(rspStatusCode));
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+/** N-ACTION carrying no Action Information dataset. N-ACTION may legitimately be
+ *  issued without a dataset (PS3.7 10.1.4), e.g. for parameterless actions. This
+ *  is the counterpart to the success test above and covers the other branch of
+ *  the new SCU logger: with a NULL request dataset it logs
+ *  "N-ACTION request action information: none" instead of dumping a dataset, and
+ *  the request goes out announcing DIMSE_DATASET_NULL. The SCP's dataset-less
+ *  receive path is exercised too, and the managed instance is still answered
+ *  with STATUS_N_Success.
+ */
+OFTEST_FLAGS(dcmnet_scu_sendACTIONRequest_succeeds_without_dataset, EF_Slow)
+{
+    NACTIONFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    // No Action Information dataset (OFnullptr) -> logged as "none", sent without a dataset.
+    OFCondition result = fixture.mppsSCU.sendACTIONRequest(fixture.presIDMpps, fixture.affectedSopInstanceUid, 1,
+                                                           OFnullptr, rspStatusCode);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK_MSG(rspStatusCode == STATUS_N_Success, OFString("Status code is: ") + DU_nactionStatusString(rspStatusCode));
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+/** Error-status path: an N-ACTION addressed to a SOP instance the SCP does not
+ *  manage ("9.9.9.9") still completes normally on the wire (result.good()), but
+ *  the SCP reports STATUS_N_InvalidSOPInstance. Confirms that a DIMSE-level error
+ *  status is propagated back to the caller separately from the transport status.
+ */
+OFTEST_FLAGS(dcmnet_scu_sendACTIONRequest_sets_error_status_for_nonexistent_instance, EF_Slow)
+{
+    NACTIONFixture fixture;
+
+    Uint16 rspStatusCode = 0;
+    // Unknown SOP Instance UID -> request succeeds but SCP rejects it by status.
+    OFCondition result = fixture.mppsSCU.sendACTIONRequest(fixture.presIDMpps, "9.9.9.9", 1,
+                                                           &fixture.actionInformation, rspStatusCode);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK(rspStatusCode == STATUS_N_InvalidSOPInstance);
+
+    fixture.scp.m_set_stop_after_assoc = OFTrue;
+    OFCHECK_MSG((result = fixture.mppsSCU.releaseAssociation()).good(), result.text());
+}
+
+
+// Test that setMaxNestingDepth/getMaxNestingDepth work on DcmSCP
+OFTEST(dcmnet_scp_maxNestingDepth_getset)
+{
+    DcmSCP scp;
+    // Default must be 0 (use compile-time default)
+    OFCHECK_EQUAL(scp.getMaxNestingDepth(), 0);
+    scp.setMaxNestingDepth(10);
+    OFCHECK_EQUAL(scp.getMaxNestingDepth(), 10);
+    scp.setMaxNestingDepth(-1);
+    OFCHECK_EQUAL(scp.getMaxNestingDepth(), -1);
+    scp.setMaxNestingDepth(0);
+    OFCHECK_EQUAL(scp.getMaxNestingDepth(), 0);
+}
+
+
+// Test that setMaxNestingDepth/getMaxNestingDepth work on DcmSCU
+OFTEST(dcmnet_scu_maxNestingDepth_getset)
+{
+    DcmSCU scu;
+    // Default must be 0 (use compile-time default)
+    OFCHECK_EQUAL(scu.getMaxNestingDepth(), 0);
+    scu.setMaxNestingDepth(5);
+    OFCHECK_EQUAL(scu.getMaxNestingDepth(), 5);
+    scu.setMaxNestingDepth(-1);
+    OFCHECK_EQUAL(scu.getMaxNestingDepth(), -1);
+    scu.setMaxNestingDepth(0);
+    OFCHECK_EQUAL(scu.getMaxNestingDepth(), 0);
+}
+
+
+/** Helper: build a DcmDataset with nested sequences to a given depth.
+ *  @param depth number of nesting levels
+ *  @param dset  output dataset (cleared before use)
+ */
+static void buildNestedDataset(Uint32 depth, DcmDataset& dset)
+{
+    dset.clear();
+    DcmItem* currentItem = &dset;
+    for (Uint32 i = 0; i < depth; ++i)
+    {
+        DcmSequenceOfItems* sq =
+            new DcmSequenceOfItems(DCM_ReferencedSeriesSequence);
+        currentItem->insert(sq);
+        DcmItem* item = new DcmItem();
+        sq->insert(item);
+        currentItem = item;
+    }
+}
+
+
+/** SCP that applies a nesting depth limit and records whether
+ *  receiving the dataset succeeded or failed.
+ */
+struct NestingTestSCP : TestSCP
+{
+    NestingTestSCP(Sint32 maxNesting)
+        : TestSCP()
+        , m_receiveResult(EC_NotYetImplemented)
+    {
+        setMaxNestingDepth(maxNesting);
+        DcmSCPConfig& config = getConfig();
+        config.setAETitle("NESTING_SCP");
+        config.setConnectionBlockingMode(DUL_NOBLOCK);
+        config.setConnectionTimeout(10);
+        config.setHostLookupEnabled(OFFalse);
+        config.setPort(0);
+        OFList<OFString> xfers;
+        xfers.push_back(UID_LittleEndianImplicitTransferSyntax);
+        OFCHECK(config.addPresentationContext(
+            UID_ModalityPerformedProcedureStepSOPClass, xfers).good());
+        OFCHECK(openListenPort().good());
+        m_portNum = config.getPort();
+    }
+
+    OFCondition handleIncomingCommand(
+        T_DIMSE_Message* incomingMsg,
+        const DcmPresentationContextInfo& presInfo)
+    {
+        if (incomingMsg->CommandField == DIMSE_N_CREATE_RQ)
+        {
+            T_DIMSE_N_CreateRQ& req = incomingMsg->msg.NCreateRQ;
+            if (req.DataSetType != DIMSE_DATASET_NULL)
+            {
+                DcmDataset* dataset = OFnullptr;
+                T_ASC_PresentationContextID presIDdset;
+                m_receiveResult =
+                    receiveDIMSEDataset(&presIDdset, &dataset);
+                /* send a response regardless of receive outcome */
+                T_DIMSE_Message rsp;
+                memset(&rsp, 0, sizeof(rsp));
+                rsp.CommandField = DIMSE_N_CREATE_RSP;
+                T_DIMSE_N_CreateRSP& createRsp = rsp.msg.NCreateRSP;
+                createRsp.MessageIDBeingRespondedTo = req.MessageID;
+                createRsp.DimseStatus = m_receiveResult.good()
+                    ? STATUS_N_Success
+                    : STATUS_N_ProcessingFailure;
+                createRsp.DataSetType = DIMSE_DATASET_NULL;
+                OFStandard::strlcpy(
+                    createRsp.AffectedSOPClassUID,
+                    req.AffectedSOPClassUID,
+                    sizeof(createRsp.AffectedSOPClassUID));
+                createRsp.opts = O_NCREATE_AFFECTEDSOPCLASSUID;
+                sendDIMSEMessage(
+                    presInfo.presentationContextID, &rsp, NULL);
+                delete dataset;
+            }
+            return EC_Normal;
+        }
+        return DcmSCP::handleIncomingCommand(incomingMsg, presInfo);
+    }
+
+    /// Result of receiveDIMSEDataset() for the last request
+    OFCondition m_receiveResult;
+    /// Port the SCP is listening on
+    Uint16 m_portNum;
+};
+
+
+// Test that SCP's nesting depth limit rejects deeply nested data
+// received over the network
+OFTEST_FLAGS(dcmnet_scp_maxNestingDepth_rejects_deep, EF_Slow)
+{
+    NestingTestSCP scp(3);
+    scp.m_set_stop_after_assoc = OFTrue;
+    scp.start();
+    OFStandard::forceSleep(1);
+
+    // SCU sends a dataset with 4 levels of nesting (exceeds limit 3)
+    DcmSCU scu;
+    scu.setAETitle("NESTING_SCU");
+    scu.setPeerAETitle("NESTING_SCP");
+    scu.setPeerHostName("localhost");
+    scu.setPeerPort(scp.m_portNum);
+    OFList<OFString> xfers;
+    xfers.push_back(UID_LittleEndianImplicitTransferSyntax);
+    OFCHECK(scu.addPresentationContext(
+        UID_ModalityPerformedProcedureStepSOPClass, xfers).good());
+    OFCHECK(scu.initNetwork().good());
+    OFCHECK(scu.negotiateAssociation().good());
+
+    DcmDataset reqDataset;
+    buildNestedDataset(4, reqDataset);
+    T_ASC_PresentationContextID presID = scu.findPresentationContextID(
+        UID_ModalityPerformedProcedureStepSOPClass,
+        UID_LittleEndianImplicitTransferSyntax);
+    OFCHECK(presID != 0);
+    Uint16 rspStatus = 0;
+    DcmDataset* rspDataset = NULL;
+    scu.sendNCREATERequest(presID, "1.2.3.4.5",
+        &reqDataset, rspDataset, rspStatus);
+    delete rspDataset;
+    if (scu.isConnected())
+        scu.releaseAssociation();
+    OFStandard::forceSleep(2);
+    scp.join();
+
+    // Verify SCP saw the nesting depth error
+    OFCHECK(scp.m_receiveResult == DIMSE_RECEIVEFAILED);
+}
+
+
+// Test that SCP's nesting depth limit accepts data within the limit
+OFTEST_FLAGS(dcmnet_scp_maxNestingDepth_accepts_shallow, EF_Slow)
+{
+    NestingTestSCP scp(3);
+    scp.m_set_stop_after_assoc = OFTrue;
+    scp.start();
+    OFStandard::forceSleep(1);
+
+    // SCU sends a dataset with 3 levels of nesting (at the limit)
+    DcmSCU scu;
+    scu.setAETitle("NESTING_SCU");
+    scu.setPeerAETitle("NESTING_SCP");
+    scu.setPeerHostName("localhost");
+    scu.setPeerPort(scp.m_portNum);
+    OFList<OFString> xfers;
+    xfers.push_back(UID_LittleEndianImplicitTransferSyntax);
+    OFCHECK(scu.addPresentationContext(
+        UID_ModalityPerformedProcedureStepSOPClass, xfers).good());
+    OFCHECK(scu.initNetwork().good());
+    OFCHECK(scu.negotiateAssociation().good());
+
+    DcmDataset reqDataset;
+    buildNestedDataset(3, reqDataset);
+    T_ASC_PresentationContextID presID = scu.findPresentationContextID(
+        UID_ModalityPerformedProcedureStepSOPClass,
+        UID_LittleEndianImplicitTransferSyntax);
+    OFCHECK(presID != 0);
+    Uint16 rspStatus = 0;
+    DcmDataset* rspDataset = NULL;
+    OFCondition result = scu.sendNCREATERequest(presID, "1.2.3.4.5",
+        &reqDataset, rspDataset, rspStatus);
+    OFCHECK_MSG(result.good(), result.text());
+    OFCHECK(rspStatus == STATUS_N_Success);
+    delete rspDataset;
+    if (scu.isConnected())
+        OFCHECK(scu.releaseAssociation().good());
+    OFStandard::forceSleep(2);
+    scp.join();
+
+    // Verify SCP successfully received the dataset
+    OFCHECK(scp.m_receiveResult.good());
 }
 
 
