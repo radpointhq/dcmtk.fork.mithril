@@ -1,4 +1,4 @@
-.TH "dcmrecv" 1 "Wed Dec 11 2024" "Version 3.6.9" "OFFIS DCMTK" \" -*- nroff -*-
+.TH "dcmrecv" 1 "Thu Oct 15 2026" "Version 3.7.1" "OFFIS DCMTK" \" -*- nroff -*-
 .nh
 .SH NAME
 dcmrecv \- Simple DICOM storage SCP (receiver)
@@ -57,6 +57,17 @@ port  tcp/ip port number to listen on
 .SS "network options"
 .PP
 .nf
+IP protocol version:
+
+  -i4   --ipv4
+          use IPv4 only (default)
+
+  -i6   --ipv6
+          use IPv6 only
+
+  -i0   --ip-auto
+          use IPv6/IPv4 dual stack
+
 association negotiation profile from configuration file:
 
   -xf   --config-file  [f]ilename, [p]rofile: string
@@ -78,7 +89,7 @@ other network options:
   -td   --dimse-timeout  [s]econds: integer (default: unlimited)
           timeout for DIMSE messages
 
-  -pdu  --max-pdu  [n]umber of bytes: integer (4096..131072)
+  -pdu  --max-pdu  [n]umber of bytes: integer (4096\&.\&.131072)
           set max receive pdu to n bytes (default: 16384)
 
   -dhl  --disable-host-lookup  disable hostname lookup
@@ -214,7 +225,7 @@ peer authentication:
 .nf
 general:
 
-  -od   --output-directory  [d]irectory: string (default: ".")
+  -od   --output-directory  [d]irectory: string (default: '\&.')
           write received objects to existing directory d
 
 subdirectory generation:
@@ -261,7 +272,7 @@ A typical use case of \fBdcmrecv\fP is to receive SOP instances that are sent fr
 .PP
 .PP
 .nf
-dcmrecv --verbose <port> --config-file storescp.cfg default
+dcmrecv --verbose <port> --config-file storescp\&.cfg default
 .fi
 .PP
 .PP
@@ -269,9 +280,9 @@ If you prefer some automatically created subdirectory structure, shorter file na
 .PP
 .PP
 .nf
-dcmrecv -v -xf storescp.cfg default <port> --series-date-subdir
+dcmrecv -v -xf storescp\&.cfg default <port> --series-date-subdir
                                            --short-unique-names
-                                           --filename-extension .dcm
+                                           --filename-extension \&.dcm
 .fi
 .PP
 .PP
@@ -279,7 +290,7 @@ In case of very large SOP instances or if the dataset should be written exactly 
 .PP
 .PP
 .nf
-dcmrecv -v -xf storescp.cfg default <port> --bit-preserving
+dcmrecv -v -xf storescp\&.cfg default <port> --bit-preserving
 .fi
 .PP
 .PP
@@ -313,7 +324,7 @@ By default, the filenames for storing the received DICOM datasets are generated 
 .PP
 .PP
 .nf
-<short-modality-prefix>.<sop-instance-uid><filename-extension>
+<short-modality-prefix>\&.<sop-instance-uid><filename-extension>
 .fi
 .PP
 .PP
@@ -323,7 +334,7 @@ The option \fI--unique-filenames\fP makes sure that each received DICOM dataset 
 .PP
 .PP
 .nf
-<short-modality-prefix>.X.<unique-identifier><filename-extension>
+<short-modality-prefix>\&.X\&.<unique-identifier><filename-extension>
 .fi
 .PP
 .PP
@@ -341,7 +352,7 @@ Finally, option \fI--system-time-names\fP allows for generating filenames based 
 .PP
 .PP
 .nf
-<date><time>.<short-modality-prefix><filename-extension>
+<date><time>\&.<short-modality-prefix><filename-extension>
 .fi
 .PP
 .PP
@@ -409,4 +420,4 @@ The default behavior should be preferred and the \fIDCMDICTPATH\fP environment v
 \fBdcmsend\fP(1), \fBstorescu\fP(1), \fBstorescp\fP(1)
 .SH "COPYRIGHT"
 .PP
-Copyright (C) 2013-2024 by OFFIS e\&.V\&., Escherweg 2, 26121 Oldenburg, Germany\&.
+Copyright (C) 2013-2026 by OFFIS e\&.V\&., Escherweg 2, 26121 Oldenburg, Germany\&.

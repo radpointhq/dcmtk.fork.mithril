@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -26,6 +26,7 @@
 
 #include "dcmtk/dcmdata/dctagkey.h"
 #include "dcmtk/dcmfg/fgtypes.h"
+#include "dcmtk/ofstd/ofthread.h"
 
 class FGBase;
 
@@ -73,8 +74,12 @@ private:
     {
     }
 
-    /// The instance of FGFactory handled by this singleton class
+    /// The single instance of FGFactory handled by this singleton class
     static FGFactory* m_Instance;
+
+    /// Mutex for protecting singleton initialization (C++98 thread-safety)
+    static OFMutex m_InstanceMutex;
+
 };
 
 #endif // FGFACT_H

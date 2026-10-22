@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were partly developed by
@@ -206,7 +206,13 @@ getString(DcmDataset *obj, DcmTagKey t, char *s, int maxlen, OFBool *spacePadded
             ec =  elem->getString(aString);
             if (ec.good())
             {
-                strncpy(s, aString, maxlen);
+                /* Use strlcpy (always NUL-terminates) rather than strncpy: when
+                 * the value length equals maxlen, strncpy would copy exactly
+                 * maxlen bytes without a terminating NUL, leaving s[maxlen]
+                 * undefined and letting the strlen()/space-stripping below read
+                 * past the field. Every caller passes a DIC_*_LEN against a
+                 * DIC_*[*_LEN + 1] buffer, so maxlen + 1 is always in bounds. */
+                OFStandard::strlcpy(s, aString, maxlen + 1);
                 if (spacePadded)
                 {
                     /* before we remove leading and tailing spaces we want to know
@@ -395,9 +401,27 @@ getAttributeList(DcmDataset *obj, DcmTagKey t, Uint16 **lst, int *listCount)
         nBytes = elem->getLength();
         *listCount = (int)(nBytes / sizeof(Uint16));
         if (*listCount > 0) {
-            *lst = (Uint16*)malloc((size_t)(nBytes + 1));
+            /* the value of the element is only accessed if it could be read, and the
+             * copy is only performed if the buffer could be allocated. Since the length
+             * of the element is determined by the sender, the allocation can well fail,
+             * in which case the list is reported as absent instead of being copied from
+             * or to a NULL pointer.
+             */
             ec = elem->getUint16Array(aList);
-            memcpy(*lst, aList, (size_t)nBytes);
+            if (ec.good() && (aList != NULL)) {
+                /* the addition is performed on size_t because nBytes could otherwise
+                 * wrap around to zero
+                 */
+                *lst = OFstatic_cast(Uint16 *, malloc(OFstatic_cast(size_t, nBytes) + 1));
+                if (*lst != NULL)
+                    memcpy(*lst, aList, (size_t)nBytes);
+                else
+                    ec = EC_MemoryExhausted;
+            }
+            if (ec.bad()) {
+                *lst = NULL;
+                *listCount = 0;
+            }
         } else {
             *lst = NULL;
         }

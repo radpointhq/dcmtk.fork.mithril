@@ -547,6 +547,16 @@ DICOM objects that belong to the same study, i.e. in contrast to the other
 \e --sort-xxx options there is no guarantee that a study directory is ever
 completed.
 
+For security reasons, \b storescp refuses to create a sort subdirectory whose
+name (after assembling prefix, sanitization and any timestamp suffix) is
+empty or equal to "." or "..".  Such a name would resolve to the output
+directory itself or its parent, allowing a peer to make incoming instances
+land outside the configured output directory through a Study Instance UID or
+Patient Name value of "." or "..".  In that case the affected C-STORE
+operation is rejected with status code "Cannot understand" and the offending
+name is logged.  Names that merely contain dots (such as a regular dotted
+DICOM UID, or a patient name containing initials) are accepted as before.
+
 Option \e --timenames creates filenames from timestamps corresponding to the
 time, \b storescp writes a file to disk.  The format is
 
@@ -663,6 +673,9 @@ DigitalIntraOralXRayImageStorageForProcessing        1.2.840.10008.5.1.4.1.1.1.3
 CTImageStorage                                       1.2.840.10008.5.1.4.1.1.2
 EnhancedCTImageStorage                               1.2.840.10008.5.1.4.1.1.2.1
 LegacyConvertedEnhancedCTImageStorage                1.2.840.10008.5.1.4.1.1.2.2
+CTImageStorageForProcessing                          1.2.840.10008.5.1.4.1.1.2.3
+EnhancedCTImageStorageForProcessing                  1.2.840.10008.5.1.4.1.1.2.4
+LegacyConvertedEnhancedCTImageStorageForProcessing   1.2.840.10008.5.1.4.1.1.2.5
 RETIRED_UltrasoundMultiframeImageStorage             1.2.840.10008.5.1.4.1.1.3
 UltrasoundMultiframeImageStorage                     1.2.840.10008.5.1.4.1.1.3.1
 MRImageStorage                                       1.2.840.10008.5.1.4.1.1.4
@@ -1031,6 +1044,6 @@ It is an error if no data dictionary can be loaded.
 
 \section storescp_copyright COPYRIGHT
 
-Copyright (C) 1996-2025 by OFFIS e.V., Escherweg 2, 26121 Oldenburg, Germany.
+Copyright (C) 1996-2026 by OFFIS e.V., Escherweg 2, 26121 Oldenburg, Germany.
 
 */

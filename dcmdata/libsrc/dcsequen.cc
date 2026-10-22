@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2023, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -82,9 +82,11 @@ DcmSequenceOfItems::DcmSequenceOfItems(const DcmSequenceOfItems &old)
         do
         {
             DcmObject *dO = old.itemList->get()->clone();
-            itemList->insert(dO, ELP_next);
-            // remember the parent
-            dO->setParent(this);
+            if (itemList->insert(dO, ELP_next))
+            {
+                // remember the parent
+                dO->setParent(this);
+            }
         } while (old.itemList->seek(ELP_next));
     }
 }
@@ -148,9 +150,11 @@ DcmSequenceOfItems &DcmSequenceOfItems::operator=(const DcmSequenceOfItems &obj)
                                 DCMDATA_WARN("DcmSequenceOfItems: Non-item element " << oldDO->getTag() << " found");
                                 break;
                         }
-                        newList->insert(newDO, ELP_next);
-                        // remember the parent
-                        newDO->setParent(this);
+                        if (newList->insert(newDO, ELP_next))
+                        {
+                            // remember the parent
+                            newDO->setParent(this);
+                        }
                     } while (obj.itemList->seek(ELP_next));
                 }
                 break;
@@ -639,11 +643,13 @@ OFCondition DcmSequenceOfItems::readSubItem(DcmInputStream &inStream,
     if (l_error.good() && (subObject != NULL))
     {
         // inStream.UnsetPutbackMark(); // not needed anymore with new stream architecture
-        itemList->insert(subObject, ELP_next);
-        // dump some information if required
-        DCMDATA_TRACE("DcmSequenceOfItems::readSubItem() Sub Item " << newTag << " inserted");
-        // remember the parent (i.e. the surrounding sequence)
-        subObject->setParent(this);
+        if (itemList->insert(subObject, ELP_next))
+        {
+            // dump some information if required
+            DCMDATA_TRACE("DcmSequenceOfItems::readSubItem() Sub Item " << newTag << " inserted");
+            // remember the parent (i.e. the surrounding sequence)
+            subObject->setParent(this);
+        }
         // read sub-item
         l_error = subObject->read(inStream, xfer, glenc, maxReadLength);
         // prevent subObject from getting deleted
@@ -704,6 +710,23 @@ OFCondition DcmSequenceOfItems::read(DcmInputStream &inStream,
         errorFlag = EC_IllegalCall;
     else
     {
+        const Uint32 depth = inStream.incrementNestingDepth();
+        const Sint32 maxDepthSetting = inStream.maxNestingDepth();
+        /* -1 = unlimited; 0 = use built-in default (DCMTK_MAX_SEQUENCE_NESTING); > 0 = custom limit */
+        const Uint32 effectiveMax = (maxDepthSetting == 0) ? DCMTK_MAX_SEQUENCE_NESTING
+                                  : (maxDepthSetting < 0)  ? 0   /* unlimited */
+                                  : OFstatic_cast(Uint32, maxDepthSetting);
+        if (effectiveMax > 0 && depth > effectiveMax)
+        {
+            DCMDATA_ERROR("DcmSequenceOfItems: Maximum nesting depth (" << effectiveMax
+                << ") exceeded while parsing sequence " << getTagName() << " " << getTag());
+            inStream.decrementNestingDepth();
+            errorFlag = EC_NestingDepthLimitExceeded;
+            // dump information if required
+            DCMDATA_TRACE("DcmSequenceOfItems::read() returns error = " << errorFlag.text());
+            return errorFlag;
+        }
+
         errorFlag = inStream.status();
 
         if (errorFlag.good() && inStream.eos())
@@ -773,6 +796,7 @@ OFCondition DcmSequenceOfItems::read(DcmInputStream &inStream,
             errorFlag = EC_Normal;
         if (errorFlag.good())
             setTransferState(ERW_ready);      // sequence is complete
+        inStream.decrementNestingDepth();
     }
     // dump information if required
     DCMDATA_TRACE("DcmSequenceOfItems::read() returns error = " << errorFlag.text());
@@ -1036,9 +1060,11 @@ OFCondition DcmSequenceOfItems::prepend(DcmItem *item)
     errorFlag = EC_Normal;
     if (item != NULL)
     {
-        itemList->prepend(item);
-        // remember the parent (i.e. the surrounding sequence)
-        item->setParent(this);
+        if (itemList->prepend(item))
+        {
+            // remember the parent (i.e. the surrounding sequence)
+            item->setParent(this);
+        }
     } else
         errorFlag = EC_IllegalCall;
 
@@ -1056,6 +1082,7 @@ OFCondition DcmSequenceOfItems::insert(DcmItem *item,
     errorFlag = EC_Normal;
     if (item != NULL)
     {
+        OFBool inserted = OFFalse;
         // special case: last position
         if (where == DCM_EndOfListIndex)
         {
@@ -1063,10 +1090,10 @@ OFCondition DcmSequenceOfItems::insert(DcmItem *item,
             {
                 // insert before end of list
                 itemList->seek(ELP_last);
-                itemList->prepend(item);
+                inserted = (itemList->prepend(item) != NULL);
             } else {
                 // insert at end of list
-                itemList->append(item);
+                inserted = (itemList->append(item) != NULL);
             }
             DCMDATA_TRACE("DcmSequenceOfItems::insert() Item inserted "
                 << (before ? "before" : "after") << " last position");
@@ -1074,7 +1101,7 @@ OFCondition DcmSequenceOfItems::insert(DcmItem *item,
             itemList->seek_to(where);
             // insert before or after "where"
             E_ListPos whichSide = (before) ? (ELP_prev) : (ELP_next);
-            itemList->insert(item, whichSide);
+            inserted = (itemList->insert(item, whichSide) != NULL);
             DCMDATA_TRACE("DcmSequenceOfItems::insert() Item inserted "
                 << (before ? "before" : "after") << " position " << where);
         }
@@ -1084,8 +1111,11 @@ OFCondition DcmSequenceOfItems::insert(DcmItem *item,
             DCMDATA_DEBUG("DcmSequenceOfItems::insert() Item already has a parent: "
                 << item->getParent()->getTag() << " VR=" << DcmVR(item->getParent()->getVR()).getVRName());
         }
-        // remember the parent (i.e. the surrounding sequence)
-        item->setParent(this);
+        if (inserted)
+        {
+            // remember the parent (i.e. the surrounding sequence)
+            item->setParent(this);
+        }
     } else
         errorFlag = EC_IllegalCall;
     return errorFlag;
@@ -1101,17 +1131,19 @@ OFCondition DcmSequenceOfItems::insertAtCurrentPos(DcmItem *item,
     errorFlag = EC_Normal;
     if (item != NULL)
     {
-        // insert before or after current position
-        E_ListPos whichSide = (before) ? (ELP_prev) : (ELP_next);
-        itemList->insert(item, whichSide);
         // check whether the new item already has a parent
         if (item->getParent() != NULL)
         {
             DCMDATA_DEBUG("DcmSequenceOfItems::insertAtCurrentPos() Item already has a parent: "
                 << item->getParent()->getTag() << " VR=" << DcmVR(item->getParent()->getVR()).getVRName());
         }
-        // remember the parent (i.e. the surrounding sequence)
-        item->setParent(this);
+        // insert before or after current position
+        E_ListPos whichSide = (before) ? (ELP_prev) : (ELP_next);
+        if (itemList->insert(item, whichSide))
+        {
+            // remember the parent (i.e. the surrounding sequence)
+            item->setParent(this);
+        }
     } else
         errorFlag = EC_IllegalCall;
     return errorFlag;
@@ -1126,15 +1158,17 @@ OFCondition DcmSequenceOfItems::append(DcmItem *item)
     errorFlag = EC_Normal;
     if (item != NULL)
     {
-        itemList->append(item);
         // check whether the new item already has a parent
         if (item->getParent() != NULL)
         {
             DCMDATA_DEBUG("DcmSequenceOfItems::append() Item already has a parent: "
                 << item->getParent()->getTag() << " VR=" << DcmVR(item->getParent()->getVR()).getVRName());
         }
-        // remember the parent (i.e. the surrounding sequence)
-        item->setParent(this);
+        if (itemList->append(item))
+        {
+            // remember the parent (i.e. the surrounding sequence)
+            item->setParent(this);
+        }
     } else
         errorFlag = EC_IllegalCall;
     return errorFlag;

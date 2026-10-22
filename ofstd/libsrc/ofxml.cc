@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2011-2025, OFFIS e.V.
+ *  Copyright (C) 2011-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were slightly modified by
@@ -223,6 +223,9 @@ XMLCSTR XMLNode::getError(XMLError xerror)
     case eXMLErrorBase64DecodeTruncatedData:      return _CXML("Warning: Base64-string is truncated");
     case eXMLErrorBase64DecodeIllegalCharacter:   return _CXML("Error: Base64-string contains an illegal character");
     case eXMLErrorBase64DecodeBufferTooSmall:     return _CXML("Error: Base64 decode output buffer is too small");
+
+    // DCMTK: additional error codes
+    case eXMLErrorRecursionDepthExceeded:         return _CXML("Error: Maximum recursion depth exceeded in XML document");
     };
     return _CXML("Unknown");
 }
@@ -328,6 +331,7 @@ char myIsTextWideChar(const void * /*b*/, int /*len*/) { return FALSE; }
         }
         static inline FILE *xfopen(XMLCSTR filename,XMLCSTR mode) { return fopen(filename,mode); }
         static inline int xstrlen(XMLCSTR c)   { return OFstatic_cast(int, strlen(c)); }
+        // DCMTK: use this macro for detecting a classic Borland compiler
         #ifdef HAVE_CLASSIC_BORLAND_COMPILER
             static inline int xstrnicmp(XMLCSTR c1, XMLCSTR c2, int l) { return strnicmp(c1,c2,l);}
             static inline int xstricmp(XMLCSTR c1, XMLCSTR c2) { return stricmp(c1,c2); }
@@ -1457,7 +1461,8 @@ char XMLNode::maybeAddTxT(void *pa, XMLCSTR tokenPStr)
 }
 // private:
 // Recursively parse an XML element.
-int XMLNode::ParseXMLElement(void *pa)
+// DCMTK: add recursion depth counter
+int XMLNode::ParseXMLElement(void *pa, unsigned long depth)
 {
     XML *pXML=OFreinterpret_cast(XML *, pa);
     int cbToken;
@@ -1471,6 +1476,13 @@ int XMLNode::ParseXMLElement(void *pa)
     enum Attrib attrib = eAttribName;
 
     assert(pXML);
+
+    // DCMTK: limit recursion depth
+    if (depth > XMLMaxRecursionDepth)
+    {
+        pXML->error = eXMLErrorRecursionDepthExceeded;
+        return FALSE;
+    }
 
     // If this is the first call to the function
     if (pXML->nFirst)
@@ -1557,7 +1569,8 @@ int XMLNode::ParseXMLElement(void *pa)
                             // FALSE this means we dont have any more
                             // processing to do...
 
-                            if (!pNew.ParseXMLElement(pXML)) return FALSE;
+                            // DCMTK: add recursion depth counter
+                            if (!pNew.ParseXMLElement(pXML, depth +1)) return FALSE;
                             else
                             {
                                 // If the call to recurse this function
@@ -1908,7 +1921,7 @@ XMLNode XMLNode::parseString(XMLCSTR lpszXML, XMLCSTR tag, XMLResults *pResults)
     struct XML xml={ lpszXML, lpszXML, 0, 0, eXMLErrorNone, NULL, 0, NULL, 0, TRUE };
 
     // Create header element
-    xnode.ParseXMLElement(&xml);
+    xnode.ParseXMLElement(&xml, 0);
     enum XMLError error = xml.error;
     if (!xnode.nChildNode()) error=eXMLErrorNoXMLTagFound;
     if ((xnode.nChildNode()==1)&&(xnode.nElement()==1)) xnode=xnode.getChildNode(); // skip the empty node
@@ -1961,7 +1974,8 @@ XMLNode XMLNode::parseFile(XMLCSTR filename, XMLCSTR tag, XMLResults *pResults)
     if (f==NULL) { if (pResults) pResults->error=eXMLErrorFileNotFound; return emptyXMLNode; }
     fseek(f,0,SEEK_END);
     int l=OFstatic_cast(int, ftell(f)),headerSz=0;
-    if (!l) { if (pResults) pResults->error=eXMLErrorEmpty; fclose(f); return emptyXMLNode; }
+    // DCMTK: handle situation where ftell() returns -1
+    if (l <= 0) { if (pResults) pResults->error=eXMLErrorEmpty; fclose(f); return emptyXMLNode; }
     fseek(f,0,SEEK_SET);
     unsigned char *buf=OFreinterpret_cast(unsigned char*, malloc(l+4));
     l=OFstatic_cast(int, fread(buf,1,l,f));
@@ -2302,7 +2316,8 @@ int XMLNode::detachFromParent(XMLNodeData *d)
     int i=0;
     while ((OFreinterpret_cast(void*, pa[i].d))!=(OFreinterpret_cast(void*, d))) i++;
     d->pParent->nChild--;
-    if (d->pParent->nChild) memmove(pa+i,pa+i+1,(d->pParent->nChild-i)*sizeof(XMLNode));
+    // DCMTK: fixed minor Clang warning
+    if (d->pParent->nChild) memmove(OFstatic_cast(void *, pa+i),pa+i+1,(d->pParent->nChild-i)*sizeof(XMLNode));
     else { free(pa); d->pParent->pChild=NULL; }
     return removeOrderElement(d->pParent,eNodeChild,i);
 }
@@ -2311,15 +2326,17 @@ XMLNode::~XMLNode()
 {
     if (!d) return;
     d->ref_count--;
-    emptyTheNode(0);
+    emptyTheNode(0, 0);
 }
 void XMLNode::deleteNodeContent()
 {
     if (!d) return;
     if (d->pParent) { detachFromParent(d); d->pParent=NULL; d->ref_count--; }
-    emptyTheNode(1);
+    emptyTheNode(1, 0);
 }
-void XMLNode::emptyTheNode(char force)
+
+// DCMTK: add recursion depth counter
+void XMLNode::emptyTheNode(char force, unsigned long depth)
 {
     XMLNodeData *dd=d; // warning: must stay this way!
     if ((dd->ref_count==0)||force)
@@ -2332,7 +2349,16 @@ void XMLNode::emptyTheNode(char force)
             pc=dd->pChild+i;
             pc->d->pParent=NULL;
             pc->d->ref_count--;
-            pc->emptyTheNode(force);
+
+            // DCMTK: limit recursion depth, i.e. accept a memory leak rather
+            // than a stack overflow. We do not expect a recursion depth of 512.
+            // When loading an XML document, this is already prevented by the load
+            // routine, i.e. here it can only happen if somebody created
+            // such a document in memory.
+            if (depth < XMLMaxRecursionDepth)
+            {
+                pc->emptyTheNode(force, depth+1);
+            }
         }
         myFree(dd->pChild);
         for(i=0; i<dd->nText; i++) free(OFconst_cast(XMLSTR, dd->pText[i]));
@@ -2363,7 +2389,7 @@ XMLNode& XMLNode::operator=( const XMLNode& A )
     // shallow copy
     if (this != &A)
     {
-        if (d) { d->ref_count--; emptyTheNode(0); }
+        if (d) { d->ref_count--; emptyTheNode(0, 0); }
         d=A.d;
         if (d) (d->ref_count) ++ ;
     }

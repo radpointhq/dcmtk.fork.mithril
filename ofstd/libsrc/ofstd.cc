@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2001-2025, OFFIS e.V.
+ *  Copyright (C) 2001-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -1809,7 +1809,7 @@ const OFString &OFStandard::encodeBase64(const unsigned char *data,
                                          const size_t width)
 {
     OFStringStream stream;
-    /* call stream variant of base64 encoder */
+    /* call stream variant of Base64 encoder */
     if (OFStandard::encodeBase64(stream, data, length, width).good())
     {
         stream << OFStringStream_ends;
@@ -1889,7 +1889,10 @@ size_t OFStandard::decodeBase64(const OFString &data,
             }
             /* delete buffer if no data has been written to the output */
             if (count == 0)
+            {
                 delete[] result;
+                result = NULL;
+            }
         }
     } else
         result = NULL;
@@ -3402,16 +3405,29 @@ void OFStandard::forceSleep(Uint32 seconds)
 }
 
 
+static const char sanitized_filename_charset[] =
+{
+  ' ', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '-', '.', '_',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '_', '_', '_', '_', '_',
+  '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
+  'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '_', '_', '_', '_', '_',
+  '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
+  'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '_', '_', '_', '_', '_'
+};
+
+
 void OFStandard::sanitizeFilename(OFString& fname)
 {
     const size_t len = fname.length();
+    char c;
     for (size_t i = 0; i < len; ++i)
     {
-#ifdef _WIN32
-        if ((fname[i] == PATH_SEPARATOR) || (fname[i] == '/')) fname[i] = '_';
-#else
-        if (fname[i] == PATH_SEPARATOR) fname[i] = '_';
-#endif
+        c = fname[i];
+        // Note: an embedded NUL (c == 0) must be treated like any other control
+        // character and replaced. It must not reach the table lookup, which
+        // would index sanitized_filename_charset[0 - 32] (out-of-bounds read).
+        if (c < 32 || c >= 127) c = '_'; else c = sanitized_filename_charset[c-32];
+        fname[i] = c;
     }
 }
 
@@ -3423,13 +3439,45 @@ void OFStandard::sanitizeFilename(char *fname)
         char *c = fname;
         while (*c)
         {
-#ifdef _WIN32
-            if ((*c == PATH_SEPARATOR) || (*c == '/')) *c = '_';
-#else
-            if (*c == PATH_SEPARATOR) *c = '_';
-#endif
+            if (*c < 32 || *c >= 127) *c = '_'; else *c = sanitized_filename_charset[*c-32];
             ++c;
         }
+    }
+}
+
+
+// Allow list used by sanitizeAETitle(). Index is (byte - 32), so the
+// table covers the printable ASCII range 0x20..0x7E. Every entry either
+// repeats the input byte (kept) or is '_' (replaced). Kept characters:
+// space, '-', '.', ':', '@', '_' and ASCII letters/digits. All shell
+// metacharacters and path separators map to '_'.
+static const char sanitized_aetitle_charset[] =
+{
+  ' ', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '-', '.', '_',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', '_', '_', '_', '_', '_',
+  '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
+  'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '_', '_', '_', '_', '_',
+  '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
+  'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '_', '_', '_', '_', '_'
+};
+
+
+void OFStandard::sanitizeAETitle(OFString& aetitle)
+{
+    // Preserve a surrounding pair of quotation marks (used by callers
+    // that substitute the AE title into an already quoted shell argument).
+    size_t len = aetitle.length();
+    size_t start = 0;
+    if (len >= 2 && aetitle[0] == '"' && aetitle[len - 1] == '"')
+    {
+        start = 1;
+        --len;
+    }
+    for (size_t i = start; i < len; ++i)
+    {
+        unsigned char c = OFstatic_cast(unsigned char, aetitle[i]);
+        if (c < 32 || c >= 127) aetitle[i] = '_';
+        else aetitle[i] = sanitized_aetitle_charset[c - 32];
     }
 }
 

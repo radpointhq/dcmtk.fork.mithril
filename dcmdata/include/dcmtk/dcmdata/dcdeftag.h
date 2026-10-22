@@ -4,7 +4,7 @@
 **
 **   User: joergr
 **   Host: thinkpad2
-**   Date: 2025-11-21 11:54:35
+**   Date: 2026-09-21 14:16:30
 **   Prog: /home/joergr/Source/dcmtk-full/public/dcmdata/libsrc/mkdeftag
 **
 **   From: ../data/dicom.dic
@@ -17,12 +17,12 @@
 
 #include "dcmtk/dcmdata/dctagkey.h"
 
-#define DCM_DICT_DEFTAG_BUILD_DATE "2025-11-21 11:54:35"
+#define DCM_DICT_DEFTAG_BUILD_DATE "2026-09-21 14:16:30"
 
 
 /*
 ** Fixed Tags in ascending (gggg,eeee) order.
-** Number of entries: 5266
+** Number of entries: 5277
 ** Tags with a repeating component (repeating tags) are listed later.
 */
 #define DCM_CommandGroupLength                   DcmTagKey(0x0000, 0x0000)
@@ -129,6 +129,7 @@
 #define DCM_RelatedGeneralSOPClassUID            DcmTagKey(0x0008, 0x001a)
 #define DCM_OriginalSpecializedSOPClassUID       DcmTagKey(0x0008, 0x001b)
 #define DCM_SyntheticData                        DcmTagKey(0x0008, 0x001c)
+#define DCM_SensitiveContentCodeSequence         DcmTagKey(0x0008, 0x001d)
 #define DCM_StudyDate                            DcmTagKey(0x0008, 0x0020)
 #define DCM_SeriesDate                           DcmTagKey(0x0008, 0x0021)
 #define DCM_AcquisitionDate                      DcmTagKey(0x0008, 0x0022)
@@ -1573,6 +1574,9 @@
 #define DCM_MaterialAttenuationSequence          DcmTagKey(0x0018, 0x9382)
 #define DCM_PhotonEnergy                         DcmTagKey(0x0018, 0x9383)
 #define DCM_XRayMassAttenuationCoefficient       DcmTagKey(0x0018, 0x9384)
+#define DCM_MetalArtifactReductionSequence       DcmTagKey(0x0018, 0x9390)
+#define DCM_MetalArtifactReductionApplied        DcmTagKey(0x0018, 0x9391)
+#define DCM_MetalArtifactReductionAlgorithmIdentificationSequence DcmTagKey(0x0018, 0x9392)
 #define DCM_ProjectionPixelCalibrationSequence   DcmTagKey(0x0018, 0x9401)
 #define DCM_DistanceSourceToIsocenter            DcmTagKey(0x0018, 0x9402)
 #define DCM_DistanceObjectToTableTop             DcmTagKey(0x0018, 0x9403)
@@ -2944,6 +2948,7 @@
 #define DCM_DocumentClassCodeSequence            DcmTagKey(0x0040, 0xe008)
 #define DCM_RetrieveURI                          DcmTagKey(0x0040, 0xe010)
 #define DCM_RetrieveLocationUID                  DcmTagKey(0x0040, 0xe011)
+#define DCM_DisplayURI                           DcmTagKey(0x0040, 0xe012)
 #define DCM_TypeOfInstances                      DcmTagKey(0x0040, 0xe020)
 #define DCM_DICOMRetrievalSequence               DcmTagKey(0x0040, 0xe021)
 #define DCM_DICOMMediaRetrievalSequence          DcmTagKey(0x0040, 0xe022)
@@ -4150,6 +4155,11 @@
 #define DCM_DoseValue                            DcmTagKey(0x3004, 0x0012)
 #define DCM_TissueHeterogeneityCorrection        DcmTagKey(0x3004, 0x0014)
 #define DCM_RecommendedIsodoseLevelSequence      DcmTagKey(0x3004, 0x0016)
+#define DCM_DoseUnitCodeSequence                 DcmTagKey(0x3004, 0x0020)
+#define DCM_RTDoseInterpretedTypeCodeSequence    DcmTagKey(0x3004, 0x0021)
+#define DCM_RTDoseInterpretedTypeCodeModifierSequence DcmTagKey(0x3004, 0x0022)
+#define DCM_DoseRadiobiologicalInterpretationSequence DcmTagKey(0x3004, 0x0023)
+#define DCM_RTDoseIntentCodeSequence             DcmTagKey(0x3004, 0x0024)
 #define DCM_DVHNormalizationPoint                DcmTagKey(0x3004, 0x0040)
 #define DCM_DVHNormalizationDoseValue            DcmTagKey(0x3004, 0x0042)
 #define DCM_DVHSequence                          DcmTagKey(0x3004, 0x0050)
@@ -4162,6 +4172,7 @@
 #define DCM_DVHMinimumDose                       DcmTagKey(0x3004, 0x0070)
 #define DCM_DVHMaximumDose                       DcmTagKey(0x3004, 0x0072)
 #define DCM_DVHMeanDose                          DcmTagKey(0x3004, 0x0074)
+#define DCM_DoseCalculationModelName             DcmTagKey(0x3004, 0x007f)
 #define DCM_DoseCalculationModelSequence         DcmTagKey(0x3004, 0x0080)
 #define DCM_DoseCalculationAlgorithmSequence     DcmTagKey(0x3004, 0x0081)
 #define DCM_CommissioningStatus                  DcmTagKey(0x3004, 0x0082)

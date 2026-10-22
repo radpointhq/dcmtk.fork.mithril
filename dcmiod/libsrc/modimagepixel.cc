@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2016-2024, Open Connections GmbH
+ *  Copyright (C) 2016-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -25,6 +25,19 @@
 #include "dcmtk/dcmdata/dcvrcs.h"
 #include "dcmtk/dcmdata/dcvrobow.h"
 #include "dcmtk/dcmiod/iodutil.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_imagePixelRules;
+    OFMutex                s_imagePixelMutex;
+}
 
 template <typename T>
 const OFString IODImagePixelModule<T>::m_ModuleName = "ImagePixelModule";
@@ -60,18 +73,48 @@ IODImagePixelModule<T>::~IODImagePixelModule()
 template <typename T>
 void IODImagePixelModule<T>::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_SamplesPerPixel, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PhotometricInterpretation, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Rows, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_Columns, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BitsAllocated, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_BitsStored, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_HighBit, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PixelRepresentation, "1", "1", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PlanarConfiguration, "1", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PixelAspectRatio, "2", "1C", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ICCProfile, "1", "3", getName(), DcmIODTypes::IE_IMAGE), OFTrue);
+    s_imagePixelMutex.lock();
+    if (!s_imagePixelRules)
+    {
+        s_imagePixelRules.reset(new IODRules());
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_SamplesPerPixel, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_PhotometricInterpretation, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_Rows, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_Columns, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_BitsAllocated, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_BitsStored, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_HighBit, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_PixelRepresentation, "1", "1", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_PlanarConfiguration, "1", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_PixelAspectRatio, "2", "1C", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+        s_imagePixelRules->addRule(
+            new IODRule(DCM_ICCProfile, "1", "3", m_ModuleName, DcmIODTypes::IE_IMAGE), OFTrue);
+    }
+    s_imagePixelMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_imagePixelRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_imagePixelRules->begin();
+        while (it != s_imagePixelRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 template <typename T>

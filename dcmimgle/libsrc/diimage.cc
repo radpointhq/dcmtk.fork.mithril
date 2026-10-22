@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1996-2025, OFFIS e.V.
+ *  Copyright (C) 1996-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -57,7 +57,7 @@ DiImage::DiImage(const DiDocument *docu,
     BitsPerSample(0),
     SamplesPerPixel(spp),
     Polarity(EPP_Normal),
-    hasSignedRepresentation(0),
+    hasSignedPixelRepresentation(0),
     hasPixelSpacing(0),
     hasImagerPixelSpacing(0),
     hasNominalScannedPixelSpacing(0),
@@ -137,7 +137,7 @@ DiImage::DiImage(const DiDocument *docu,
             BitsPerSample = BitsStored;
             if (Document->getValue(DCM_PixelRepresentation, us) > 0)
             {
-                hasSignedRepresentation = (us == 1);
+                hasSignedPixelRepresentation = (us == 1);
                 if ((us != 0) && (us != 1))
                     DCMIMGLE_WARN("invalid value for 'PixelRepresentation' (" << us << ") ... assuming 'unsigned' (0)");
             } else {
@@ -246,7 +246,7 @@ DiImage::DiImage(const DiDocument *docu,
     BitsPerSample(0),
     SamplesPerPixel(0),
     Polarity(EPP_Normal),
-    hasSignedRepresentation(0),
+    hasSignedPixelRepresentation(0),
     hasPixelSpacing(0),
     hasImagerPixelSpacing(0),
     hasNominalScannedPixelSpacing(0),
@@ -279,7 +279,7 @@ DiImage::DiImage(const DiImage *image,
     BitsPerSample(image->BitsPerSample),
     SamplesPerPixel(image->SamplesPerPixel),
     Polarity(image->Polarity),
-    hasSignedRepresentation(image->hasSignedRepresentation),
+    hasSignedPixelRepresentation(image->hasSignedPixelRepresentation),
     hasPixelSpacing(image->hasPixelSpacing),
     hasImagerPixelSpacing(image->hasImagerPixelSpacing),
     hasNominalScannedPixelSpacing(image->hasNominalScannedPixelSpacing),
@@ -315,7 +315,7 @@ DiImage::DiImage(const DiImage *image,
     BitsPerSample(image->BitsPerSample),
     SamplesPerPixel(image->SamplesPerPixel),
     Polarity(image->Polarity),
-    hasSignedRepresentation(image->hasSignedRepresentation),
+    hasSignedPixelRepresentation(image->hasSignedPixelRepresentation),
     hasPixelSpacing(0),
     hasImagerPixelSpacing(0),
     hasNominalScannedPixelSpacing(0),
@@ -382,7 +382,7 @@ DiImage::DiImage(const DiImage *image,
     BitsPerSample(image->BitsPerSample),
     SamplesPerPixel(image->SamplesPerPixel),
     Polarity(image->Polarity),
-    hasSignedRepresentation(image->hasSignedRepresentation),
+    hasSignedPixelRepresentation(image->hasSignedPixelRepresentation),
     hasPixelSpacing(image->hasPixelSpacing),
     hasImagerPixelSpacing(image->hasImagerPixelSpacing),
     hasNominalScannedPixelSpacing(image->hasNominalScannedPixelSpacing),
@@ -416,7 +416,7 @@ DiImage::DiImage(const DiImage *image,
     BitsPerSample(image->BitsPerSample),
     SamplesPerPixel(image->SamplesPerPixel),
     Polarity(image->Polarity),
-    hasSignedRepresentation(0),
+    hasSignedPixelRepresentation(0),
     hasPixelSpacing(image->hasPixelSpacing),
     hasImagerPixelSpacing(image->hasImagerPixelSpacing),
     hasNominalScannedPixelSpacing(image->hasNominalScannedPixelSpacing),
@@ -543,12 +543,38 @@ void DiImage::convertPixelData()
     DCMIMGLE_TRACE("Columns: " << Columns << ", Rows: " << Rows << ", Samples per Pixel: " << SamplesPerPixel
         << ", Photometric Interpretation: " << Document->getPhotometricInterpretation());
     DCMIMGLE_TRACE("Bits Allocated: " << BitsAllocated << ", Bits Stored: " << BitsStored << ", High Bit: " << HighBit
-        << ", " << (hasSignedRepresentation ? "Signed" : "Unsigned") << " integer");
+        << ", " << (hasSignedPixelRepresentation ? "Signed" : "Unsigned") << " integer");
     /* check for valid/supported pixel data encoding */
     if ((evr == EVR_OW) || ((evr == EVR_OB) && (compressed || (BitsAllocated <= 16))))
     {
-        const unsigned long fsize = OFstatic_cast(unsigned long, Rows) * OFstatic_cast(unsigned long, Columns) *
-            OFstatic_cast(unsigned long, SamplesPerPixel);
+        /* Compute the frame size and the derived pixel counts with overflow checking.
+         * These counts (see DiInputPixel: FrameSize, PixelStart, PixelCount) are stored
+         * in "unsigned long", which is 64 bits wide on LP64 (e.g. 64-bit Linux) but only
+         * 32 bits on ILP32 and on 64-bit Windows (LLP64). On the latter, a large image
+         * would silently truncate these counts and the under-sized buffers allocated from
+         * them would subsequently be overrun, so such images are rejected below.
+         *
+         * Known limitation: this rejects (instead of renders) images whose total pixel
+         * count is not representable in "unsigned long", i.e. exceeds 2^32-1 on the
+         * platforms mentioned above. Such images were never processed correctly there;
+         * they are now refused instead of corrupting memory. Actually supporting them
+         * would require converting the entire pixel-count chain of dcmimgle and dcmimage
+         * (DiInputPixel, DiMonoOutputPixel, DiColorOutputPixel and all pixel templates,
+         * i.e. more than 1000 occurrences of "unsigned long") to size_t. That would also
+         * change the signature of public getters such as DiInputPixel::getCount() and
+         * thus break the API/ABI of a widely used interface, which is why it is deferred
+         * to a planned release rather than done as part of a bug fix.
+         */
+        unsigned long fsize = 0;
+        unsigned long pixelStart = 0;
+        unsigned long pixelCount = 0;
+        /* the last two are the values that DiInputPixel derives from the frame size,
+         * i.e. PixelStart (first * fsize) and PixelCount/ComputedCount (number * fsize) */
+        const OFBool sizeIsValid =
+            OFStandard::safeMult(OFstatic_cast(unsigned long, Rows), OFstatic_cast(unsigned long, Columns), fsize) &&
+            OFStandard::safeMult(fsize, OFstatic_cast(unsigned long, SamplesPerPixel), fsize) &&
+            OFStandard::safeMult(OFstatic_cast(unsigned long, FirstFrame), fsize, pixelStart) &&
+            OFStandard::safeMult(OFstatic_cast(unsigned long, NumberOfFrames), fsize, pixelCount);
         if ((BitsAllocated < 1) || (BitsStored < 1))
         {
             ImageStatus = EIS_InvalidValue;
@@ -563,50 +589,61 @@ void DiImage::convertPixelData()
                 << "'BitsStored' (" << BitsStored << ") and 'HighBit' (" << HighBit << ")");
             return;
         }
-        else if ((evr == EVR_OB) && (BitsStored <= 8))
+        else if (!sizeIsValid)
+        {
+            /* see the comment on the overflow-checked computation above: the pixel count
+               cannot be represented on this platform, so the image is refused instead of
+               processed with truncated (and therefore under-sized) buffers */
+            ImageStatus = EIS_InvalidValue;
+            DCMIMGLE_ERROR("cannot process image with " << Rows << "x" << Columns << " pixels, "
+                << SamplesPerPixel << " sample(s) per pixel and " << NumberOfFrames
+                << " frame(s): total number of pixels exceeds the capacity of this platform");
+            return;
+        }
+        else if ((evr == EVR_OB) && (!compressed) && (BitsStored <= 8))
         {
             // report a warning message on this standard violation
-            if (!compressed && (BitsAllocated > 8))
+            if (BitsAllocated > 8)
                 DCMIMGLE_WARN("invalid value for 'BitsAllocated' (" << BitsAllocated << "), > 8 for OB encoded uncompressed 'PixelData'");
-            if (hasSignedRepresentation)
+            if (hasSignedPixelRepresentation)
                 InputData = new DiInputPixelTemplate<Uint8, Sint8>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
             else
                 InputData = new DiInputPixelTemplate<Uint8, Uint8>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
         }
-        else if ((evr == EVR_OB) && (BitsStored <= 16))
+        else if ((evr == EVR_OB) && (!compressed) && (BitsStored <= 16))
         {
             // report a warning message on this standard violation
-            if (!compressed && (BitsAllocated > 8))
+            if (BitsAllocated > 8)
                 DCMIMGLE_WARN("invalid value for 'BitsAllocated' (" << BitsAllocated << "), > 8 for OB encoded uncompressed 'PixelData'");
-            if (hasSignedRepresentation)
+            if (hasSignedPixelRepresentation)
                 InputData = new DiInputPixelTemplate<Uint8, Sint16>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
             else
                 InputData = new DiInputPixelTemplate<Uint8, Uint16>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
         }
-        else if ((evr == EVR_OB) && compressed && (BitsStored <= 32))
+        else if ((evr == EVR_OB) && (!compressed) && (BitsStored <= 32))
         {
-            if (hasSignedRepresentation)
+            if (hasSignedPixelRepresentation)
                 InputData = new DiInputPixelTemplate<Uint8, Sint32>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
             else
                 InputData = new DiInputPixelTemplate<Uint8, Uint32>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
         }
         else if (BitsStored <= 8)
         {
-            if (hasSignedRepresentation)
+            if (hasSignedPixelRepresentation)
                 InputData = new DiInputPixelTemplate<Uint16, Sint8>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
             else
                 InputData = new DiInputPixelTemplate<Uint16, Uint8>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
         }
         else if (BitsStored <= 16)
         {
-            if (hasSignedRepresentation)
+            if (hasSignedPixelRepresentation)
                 InputData = new DiInputPixelTemplate<Uint16, Sint16>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
             else
                 InputData = new DiInputPixelTemplate<Uint16, Uint16>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
         }
         else if (BitsStored <= 32)
         {
-            if (hasSignedRepresentation)
+            if (hasSignedPixelRepresentation)
                 InputData = new DiInputPixelTemplate<Uint16, Sint32>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);
             else
                 InputData = new DiInputPixelTemplate<Uint16, Uint32>(Document, BitsAllocated, BitsStored, HighBit, FirstFrame, NumberOfFrames, fsize, &FileCache, CurrentFragment);

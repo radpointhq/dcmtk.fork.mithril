@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2025, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -22,7 +22,7 @@
 
 #include "dcmtk/config/osconfig.h"    /* make sure OS specific configuration is included first */
 
-#include "dcmtk/ofstd/ofuuid.h"
+#include "dcmtk/ofstd/ofuuidgn.h"
 #include "dcmtk/ofstd/ofstd.h"
 #include "dcmtk/ofstd/ofmath.h"
 
@@ -110,6 +110,7 @@ static inline void checkAndOutputFloatValue(STD_NAMESPACE ostream &out,
 OFCondition DcmOtherFloat::writeXML(STD_NAMESPACE ostream &out,
                                     const size_t flags)
 {
+    OFCondition l_error = EC_Normal;
     /* always write XML start tag */
     writeXMLStartTag(out, flags);
     /* OF data requires special handling in the Native DICOM Model format */
@@ -122,19 +123,20 @@ OFCondition DcmOtherFloat::writeXML(STD_NAMESPACE ostream &out,
             if (flags & DCMTypes::XF_encodeBase64)
             {
                 out << "<InlineBinary>";
-                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue());
-                /* Base64 encoder requires big endian input data */
-                swapIfNecessary(EBO_BigEndian, gLocalByteOrder, byteValues, getLengthField(), sizeof(Float32));
-                /* update the byte order indicator variable correspondingly */
-                setByteOrder(EBO_BigEndian);
+                /* the Native DICOM Model requires little endian byte ordering */
+                Uint8 *byteValues = OFstatic_cast(Uint8 *, getValue(EBO_LittleEndian));
                 OFStandard::encodeBase64(out, byteValues, OFstatic_cast(size_t, getLengthField()));
                 out << "</InlineBinary>" << OFendl;
             } else {
                 /* generate a new UID but the binary data is not (yet) written. */
-                OFUUID uuid;
-                out << "<BulkData uuid=\"";
-                uuid.print(out, OFUUID::ER_RepresentationHex);
-                out << "\"/>" << OFendl;
+                OFshared_ptr<OFUUID> const uuid = OFUUIDGenerator::create();
+                if (uuid) {
+                    out << "<BulkData uuid=\"";
+                    uuid->print(out, OFUUID::NotationCanonical);
+                    out << "\"/>" << OFendl;
+                } else {
+                    l_error = EC_MemoryExhausted;
+                }
             }
         }
     } else {
@@ -169,8 +171,8 @@ OFCondition DcmOtherFloat::writeXML(STD_NAMESPACE ostream &out,
     }
     /* always write XML end tag */
     writeXMLEndTag(out, flags);
-    /* always report success */
-    return EC_Normal;
+
+    return l_error;
 }
 
 

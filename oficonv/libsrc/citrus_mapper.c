@@ -51,6 +51,7 @@
 #include "citrus_mmap.h"
 #include "citrus_module.h"
 #include "citrus_hash.h"
+#include "citrus_csmapper.h"
 #include "oficonv_strlcpy.h"
 
 #define _CITRUS_MAPPER_DIR  "mapper.dir"
@@ -212,11 +213,11 @@ quit:
 }
 
 /*
- * mapper_close:
+ * _citrus_mapper_close_nohash:
  *  simply close a mapper. (without handling hash)
  */
-static void
-mapper_close(struct _citrus_csmapper *cm)
+void
+_citrus_mapper_close_nohash(struct _citrus_csmapper *cm)
 {
     if (cm->cm_module) {
         if (cm->cm_ops) {
@@ -303,7 +304,7 @@ mapper_open(struct _citrus_mapper_area * ma,
     return (0);
 
 err:
-    mapper_close(cm);
+    _citrus_mapper_close_nohash(cm);
     return (ret);
 }
 
@@ -411,6 +412,13 @@ _citrus_csmapper_close(struct _citrus_csmapper *cm)
 
     if (cm) {
         WLOCK(&cm_lock);
+        if (!_citrus_mapper_area_exists()) {
+            /* Someone has already deleted the hash table by calling OFiconv_cleanup().
+               Don't try to remove the hash entry since this might cause
+               a use-after-free segfault. */
+            goto quit;
+        }
+
         if (cm->cm_refcount == REFCOUNT_PERSISTENT)
             goto quit;
         if (cm->cm_refcount > 0) {
@@ -420,7 +428,7 @@ _citrus_csmapper_close(struct _citrus_csmapper *cm)
             free(cm->cm_key);
         }
         UNLOCK(&cm_lock);
-        mapper_close(cm);
+        _citrus_mapper_close_nohash(cm);
         return;
 quit:
         UNLOCK(&cm_lock);

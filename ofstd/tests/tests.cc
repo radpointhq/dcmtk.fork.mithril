@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2011-2025, OFFIS e.V.
+ *  Copyright (C) 2011-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -48,6 +48,8 @@ OFTEST_REGISTER(ofstd_OFStack);
 OFTEST_REGISTER(ofstd_OFStandard_isReadWriteable);
 OFTEST_REGISTER(ofstd_OFStandard_appendFilenameExtension);
 OFTEST_REGISTER(ofstd_OFStandard_removeRootDirFromPathname);
+OFTEST_REGISTER(ofstd_OFStandard_sanitizeAETitle);
+OFTEST_REGISTER(ofstd_OFStandard_sanitizeFilename);
 OFTEST_REGISTER(ofstd_OFFile);
 OFTEST_REGISTER(ofstd_OFString_compare);
 OFTEST_REGISTER(ofstd_OFString_concatenate);
@@ -60,8 +62,15 @@ OFTEST_REGISTER(ofstd_OFString_identity_3);
 OFTEST_REGISTER(ofstd_OFString_reserve);
 OFTEST_REGISTER(ofstd_OFString_substr);
 OFTEST_REGISTER(ofstd_OFTime);
-OFTEST_REGISTER(ofstd_OFUUID_1);
-OFTEST_REGISTER(ofstd_OFUUID_2);
+OFTEST_REGISTER(ofstd_OFUUID_equalities);
+OFTEST_REGISTER(ofstd_OFUUID_inequalities);
+OFTEST_REGISTER(ofstd_OFUUID_notation_integer);
+OFTEST_REGISTER(ofstd_OFUUID_notation_canonical);
+OFTEST_REGISTER(ofstd_OFUUID_notation_oid);
+OFTEST_REGISTER(ofstd_OFUUID_notation_urn);
+OFTEST_REGISTER(ofstd_OFUUID_variant);
+OFTEST_REGISTER(ofstd_OFUUID_version);
+OFTEST_REGISTER(ofstd_OFUUID_monotonicity);
 OFTEST_REGISTER(ofstd_OFVector);
 OFTEST_REGISTER(ofstd_atof);
 OFTEST_REGISTER(ofstd_base64_1);

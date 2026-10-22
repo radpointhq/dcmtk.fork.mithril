@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2007-2025, OFFIS e.V.
+ *  Copyright (C) 2007-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -33,6 +33,7 @@ I2DJpegSource::I2DJpegSource()
     , m_disableExtSeqTs(OFFalse)
     , m_insistOnJFIF(OFFalse)
     , m_keepAPPn(OFFalse)
+    , m_keepAPPnMask(0)
     , m_keepCOM(OFTrue)
     , m_lossyCompressed(OFTrue)
     , m_isJPEGLS(OFFalse)
@@ -77,6 +78,17 @@ void I2DJpegSource::setInsistOnJFIF(const OFBool enabled)
 void I2DJpegSource::setKeepAPPn(const OFBool enabled)
 {
     m_keepAPPn = enabled;
+}
+
+void I2DJpegSource::setKeepAPP(const Uint8 appNumber, const OFBool enabled)
+{
+    if (appNumber > 15)
+        return;
+    const Uint16 bit = OFstatic_cast(Uint16, 1 << appNumber);
+    if (enabled)
+        m_keepAPPnMask = OFstatic_cast(Uint16, m_keepAPPnMask | bit);
+    else
+        m_keepAPPnMask = OFstatic_cast(Uint16, m_keepAPPnMask & ~bit);
 }
 
 void I2DJpegSource::setKeepCOM(const OFBool enabled)
@@ -616,7 +628,15 @@ OFCondition I2DJpegSource::extractRawJPEGStream(char*& pixelData, Uint32& pixLen
             // No need to subtract / add bytes
             break;
         }
-        else if (!m_keepAPPn && (marker >= E_JPGMARKER_APP0 && marker <= E_JPGMARKER_APP15))
+        // By default all APPn markers are removed from the stream. Individual
+        // APPn markers can be retained via setKeepAPP() (m_keepAPPnMask), e.g. to
+        // keep APP14 (0xFFEE), which typically holds the Adobe color transform
+        // marker whose transform flag some JPEG decoders rely on to decide whether
+        // a YCbCr to RGB conversion has to be applied; dropping it can make such
+        // decoders render wrong colors. The marker is kept by number, regardless
+        // of its actual application identifier.
+        else if (!m_keepAPPn && (marker >= E_JPGMARKER_APP0 && marker <= E_JPGMARKER_APP15)
+                 && ((m_keepAPPnMask & OFstatic_cast(Uint16, 1 << (marker - E_JPGMARKER_APP0))) == 0))
         {
             DCMDATA_LIBI2D_DEBUG("I2DJpegSource: Skipping application segment APP" << (marker - E_JPGMARKER_APP0));
             jpegFile.fseek((*entry)->bytePos - jpegFile.ftell(), SEEK_CUR);
@@ -707,6 +727,17 @@ OFCondition I2DJpegSource::extractRawJPEGStream(char*& pixelData, Uint32& pixLen
         {
             DCMDATA_LIBI2D_ERROR("Length field in JPEG data bigger than remaining file");
             cond = makeOFCondition(OFM_dcmdata, 18, OF_error, "Length field in JPEG data bigger than remaining file");
+        }
+        // Make sure the block still fits into the buffer. The block boundaries are
+        // derived from marker offsets collected during an earlier scan of the file.
+        // If the file content is no longer consistent with that scan (e.g. the
+        // underlying file changed between the two passes, or the APP/COM segment
+        // accounting is off), the accumulated block sizes could otherwise exceed
+        // rawStreamSize and write past the end of the allocated buffer.
+        else if (blockSize > (pixelData + rawStreamSize) - currBufferPos)
+        {
+            DCMDATA_LIBI2D_ERROR("Inconsistent segment sizes in JPEG data");
+            cond = makeOFCondition(OFM_dcmdata, 18, OF_error, "Inconsistent segment sizes in JPEG data");
         }
         if (cond.good())
         {

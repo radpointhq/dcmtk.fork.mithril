@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -27,7 +27,7 @@
 #include "dcmtk/dcmfg/fg.h"
 #include "dcmtk/dcmfg/fgdefine.h"
 #include "dcmtk/dcmfg/fgtypes.h"
-#include "dcmtk/ofstd/ofmap.h"
+#include "dcmtk/ofstd/ofvector.h"
 
 // Forward declaration
 class IODMultiframeDimensionModule;
@@ -42,8 +42,9 @@ class DCMTK_DCMFG_EXPORT FGInterface
 public:
 
     /// Type representing per-frame functional groups, i.e.\ a number of
-    /// functional groups assigned to each frame
-    typedef OFMap<Uint32, FunctionalGroups*> PerFrameGroups;
+    /// functional groups assigned to each frame.  Indexed by frame number
+    /// (0-based); a NULL entry means no per-frame groups for that frame.
+    typedef OFVector<FunctionalGroups*> PerFrameGroups;
 
     /// Iterator type for iterating over functional groups
     typedef FunctionalGroups::iterator iterator;
@@ -465,8 +466,8 @@ private:
     /// Shared functional groups
     FunctionalGroups m_shared;
 
-    /// Link from frame number (map key) to the list of functional groups (value)
-    /// relevant for the frame
+    /// Per-frame functional groups, indexed by frame number (0-based).
+    /// A NULL entry means no per-frame groups exist for that frame.
     PerFrameGroups m_perFrame;
 
     /// If enabled, functional group structure is checked on write(). Otherwise,

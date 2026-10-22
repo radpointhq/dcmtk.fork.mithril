@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2016-2025, OFFIS e.V.
+ *  Copyright (C) 2016-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -54,6 +54,159 @@ static OFLogger dcm2jsonLogger = OFLog::getLogger("dcmtk.apps." OFFIS_CONSOLE_AP
 
 static char rcsid[] = "$dcmtk: " OFFIS_CONSOLE_APPLICATION " v"
 OFFIS_DCMTK_VERSION " " OFFIS_DCMTK_RELEASEDATE " $";
+
+static OFCondition checkAndConvertCharacterSet(const char* ifname,
+    DcmFileFormat& dfile,
+    OFBool& opt_replaceCharset,
+    const char* opt_defaultCharset,
+    OFString& originalCharset,
+    const OFBool opt_checkAllStrings)
+{
+    OFCondition result = EC_IllegalParameter;
+
+    if (ifname != NULL)
+    {
+        DcmDataset* dset = dfile.getDataset();
+
+        OFString sopClass;
+        /* check whether this file is a DICOMDIR */
+        const OFBool isDICOMDIR = dfile.getMetaInfo()->findAndGetOFString(DCM_MediaStorageSOPClassUID, sopClass).good() &&
+            (sopClass == UID_MediaStorageDirectoryStorage);
+
+        /* determine character set encoding of the dataset */
+        if (dset->findAndGetOFStringArray(DCM_SpecificCharacterSet, originalCharset).good())
+        {
+            if (opt_defaultCharset != NULL)
+            {
+                /* use "debug" instead of "warn" in order to avoid too much output in default mode */
+                OFLOG_DEBUG(dcm2jsonLogger, "ignoring character set '" << opt_defaultCharset
+                    << "' specified with option --charset-assume since it is not needed for this data set");
+            }
+            /* no error */
+            result = EC_Normal;
+        }
+        else
+        {
+            /* SpecificCharacterSet is not present in the dataset */
+            if (dset->containsExtendedCharacters(opt_checkAllStrings))
+            {
+                if (opt_defaultCharset == NULL)
+                {
+                    if (isDICOMDIR)
+                    {
+                        /* check for SpecificCharacterSet on any data set level */
+                        if (dset->tagExistsWithValue(DCM_SpecificCharacterSet, OFTrue /*searchIntoSub*/))
+                        {
+                            /* for now, we assume that everything is ok */
+                            result = EC_Normal;
+                        }
+                        else {
+                            OFLOG_ERROR(dcm2jsonLogger, OFFIS_CONSOLE_APPLICATION << ": SpecificCharacterSet (0008,0005) element "
+                                << "absent (at all levels of the data set) but extended characters used in file: " << ifname);
+                            OFLOG_DEBUG(dcm2jsonLogger, "try using option --charset-assume to manually specify an appropriate character set");
+                            result = makeOFCondition(OFM_dcmdata, EC_CODE_CannotSelectCharacterSet, OF_error, "Missing Specific Character Set");
+                        }
+                    }
+                    else {
+                        /* the dataset contains non-ASCII characters that really should not be there */
+                        OFLOG_ERROR(dcm2jsonLogger, OFFIS_CONSOLE_APPLICATION << ": SpecificCharacterSet (0008,0005) element "
+                            << "absent (at the main level of the data set) but extended characters used in file: " << ifname);
+                        OFLOG_DEBUG(dcm2jsonLogger, "use option --charset-assume to manually specify an appropriate character set");
+                        result = makeOFCondition(OFM_dcmdata, EC_CODE_CannotSelectCharacterSet, OF_error, "Missing Specific Character Set");
+                    }
+                }
+                else
+                {
+                    result = EC_Normal;
+                    originalCharset = opt_defaultCharset;
+                    /* first, map "old" character set names to DICOM defined terms */
+                    if (originalCharset == "latin-1")
+                        originalCharset = "ISO_IR 100";
+                    else if (originalCharset == "latin-2")
+                        originalCharset = "ISO_IR 101";
+                    else if (originalCharset == "latin-3")
+                        originalCharset = "ISO_IR 109";
+                    else if (originalCharset == "latin-4")
+                        originalCharset = "ISO_IR 110";
+                    else if (originalCharset == "latin-5")
+                        originalCharset = "ISO_IR 148";
+                    else if (originalCharset == "cyrillic")
+                        originalCharset = "ISO_IR 144";
+                    else if (originalCharset == "arabic")
+                        originalCharset = "ISO_IR 127";
+                    else if (originalCharset == "greek")
+                        originalCharset = "ISO_IR 126";
+                    else if (originalCharset == "hebrew")
+                        originalCharset = "ISO_IR 138";
+                    else if (originalCharset == "latin-9")
+                        originalCharset = "ISO_IR 203";
+
+                    if (originalCharset != "ISO_IR 192"
+                        && originalCharset != "ISO_IR 100"
+                        && originalCharset != "ISO_IR 101"
+                        && originalCharset != "ISO_IR 109"
+                        && originalCharset != "ISO_IR 110"
+                        && originalCharset != "ISO_IR 144"
+                        && originalCharset != "ISO_IR 127"
+                        && originalCharset != "ISO_IR 126"
+                        && originalCharset != "ISO_IR 138"
+                        && originalCharset != "ISO_IR 148"
+                        && originalCharset != "ISO_IR 203")
+                    {
+                        OFLOG_FATAL(dcm2jsonLogger, OFFIS_CONSOLE_APPLICATION << ": Character set '"
+                            << opt_defaultCharset << "' specified with option --charset-assume not supported");
+                        result = makeOFCondition(OFM_dcmdata, EC_CODE_CannotSelectCharacterSet, OF_error, "Cannot select character set");
+                    }
+                    if (result.good() && !isDICOMDIR)
+                    {
+                        OFLOG_INFO(dcm2jsonLogger, "inserting SpecificCharacterSet (0008,0005) element with value '" << originalCharset << "'");
+                        /* insert the SpecificCharacterSet (0008,0005) element with new value */
+                        result = dset->putAndInsertOFStringArray(DCM_SpecificCharacterSet, originalCharset);
+                    }
+                }
+            }
+            else
+            {
+                if (opt_defaultCharset != NULL)
+                {
+                    /* use "debug" instead of "warn" in order to avoid too much output in default mode */
+                    OFLOG_DEBUG(dcm2jsonLogger, "ignoring character set '" << opt_defaultCharset
+                        << "' specified with option --charset-assume since it is not needed for this data set");
+                }
+                /* no error */
+                result = EC_Normal;
+            }
+        }
+
+        /* convert the file to UTF-8 encoding */
+        if (result.good()
+            // no original char set given or already in UTF8
+            && ( (originalCharset != "" && originalCharset != "ISO_IR 192")
+                // OR it is a DICOMDIR. then the originalCharset may be empty, transform anyway
+                || isDICOMDIR)
+            )
+        {
+            /* convert entire DICOM file or data set to UTF-8 encoding */
+            result = dfile.convertToUTF8();
+            if (result.bad())
+            {
+                OFLOG_FATAL(dcm2jsonLogger, result.text() << ": converting file to UTF-8: " << ifname);
+            }
+            else if ((! opt_replaceCharset)
+                && (originalCharset.length() > 0))
+            { // result is good, conversion okay, make sure the tag (0008,0005) is set to original charset
+                result = dset->putAndInsertOFStringArray(DCM_SpecificCharacterSet, originalCharset, OFTrue);
+                if (result.bad())
+                {
+                    OFLOG_ERROR(dcm2jsonLogger, result.text() << ": unable to set original character set: " << originalCharset);
+                }
+            }
+        }
+    }
+    return result;
+}
+
+
 
 // ********************************************
 
@@ -126,28 +279,28 @@ static OFCondition writeFile(
  */
 static void appendURLEncodedPath(const char *path, OFString& output_url)
 {
-  if (path)
-  {
-    char c;
-    for (const char *p=path; *p != '\0'; ++p)
+    if (path)
     {
-      c = *p;
-      // URL encode all characters except a-z, A-Z, 0-9, and "-_./!~$:"
-      // The reserved characters "/" and ":" are not URL encoded because they routinely occur in file: URLs
-      if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '/' || c == '!' || c == '~' || c == '$' || c == ':') output_url.append(1, *p);
-      else if (c == '\\')
-      {
-          // convert backslashes to forward slashes
-          output_url.append("/");
-      }
-      else
-      {
-          char buf[5];
-          OFStandard::snprintf(buf, 5, "%%%02X", c);
-          output_url.append(buf);
-      }
+        char c;
+        for (const char* p = path; *p != '\0'; ++p)
+        {
+            c = *p;
+            // URL encode all characters except a-z, A-Z, 0-9, and "-_./!~$:"
+            // The reserved characters "/" and ":" are not URL encoded because they routinely occur in file: URLs
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '/' || c == '!' || c == '~' || c == '$' || c == ':') output_url.append(1, *p);
+            else if (c == '\\')
+            {
+                // convert backslashes to forward slashes
+                output_url.append("/");
+            }
+            else
+            {
+                char buf[5];
+                OFStandard::snprintf(buf, 5, "%%%02X", c);
+                output_url.append(buf);
+            }
+        }
     }
-  }
 }
 
 /** determine the real path to the given working directory
@@ -186,6 +339,9 @@ int main(int argc, char *argv[])
 {
     OFBool opt_format = OFTrue;
     OFBool opt_addMetaInformation = OFFalse;
+    OFBool opt_replaceCharset = OFFalse;
+    const char *opt_defaultCharset = NULL;
+    OFBool opt_checkAllStrings = OFFalse;
     OFBool opt_encode_extended = OFFalse;
     DcmJsonFormat::NumStringPolicy opt_ns_policy = DcmJsonFormat::NSP_auto;
 
@@ -239,6 +395,14 @@ int main(int argc, char *argv[])
         cmd.addOption("--bulk-uri-prefix",    "+bp", 1, "[u]ri prefix: string",  "use prefix u when generating bulk data URIs\n(default: file URI)");
         cmd.addOption("--bulk-dir",           "+bd", 1, "[d]irectory: string",  "write bulk data files to d (default: '.')");
         cmd.addOption("--bulk-subdir",        "+bs",    "create subdirectory for each SOP instance\n(default: no subdirectory)");
+      cmd.addSubGroup("charset handling:");
+        cmd.addOption("--charset-keep",       "+c",     "write the original charset to JSON (default)");
+        cmd.addOption("--charset-replace",    "-c",     "replace the original charset with UTF-8 in JSON");
+      cmd.addSubGroup("specific character set:");
+        cmd.addOption("--charset-require",    "+Cr",    "require declaration of extended charset (def.)");
+        cmd.addOption("--charset-assume",     "+Ca", 1, "[c]harset: string",
+                                                        "assume charset c if no extended charset declared");
+        cmd.addOption("--charset-check-all",  "+Cc",    "check all data elements with string values\n(default: only PN, LO, LT, SH, ST, UC and UT)");
 
     cmd.addGroup("output options:");
       cmd.addSubGroup("output format:");
@@ -366,6 +530,25 @@ int main(int argc, char *argv[])
             app.checkConflict("--write-meta", "--read-dataset", opt_readMode == ERM_dataset);
             opt_addMetaInformation = OFTrue;
         }
+
+        /* charset options */
+        cmd.beginOptionBlock();
+        if (cmd.findOption("--charset-keep"))
+            opt_replaceCharset = OFFalse;
+        if (cmd.findOption("--charset-replace"))
+            opt_replaceCharset = OFTrue;
+        cmd.endOptionBlock();
+
+        /* specific character set option */
+        cmd.beginOptionBlock();
+        if (cmd.findOption("--charset-require"))
+            opt_defaultCharset = NULL;
+        if (cmd.findOption("--charset-assume"))
+            app.checkValue(cmd.getValue(opt_defaultCharset));
+        cmd.endOptionBlock();
+        if (cmd.findOption("--charset-check-all"))
+            opt_checkAllStrings = OFTrue;
+
     }
 
     /* print resource identifier */
@@ -406,31 +589,11 @@ int main(int argc, char *argv[])
         status = dfile.loadFile(ifname, opt_ixfer, EGL_noChange, DCM_MaxReadLength, opt_readMode);
         if (status.good())
         {
-            DcmDataset *dset = dfile.getDataset();
-            /* check for SpecificCharacterSet on any data set level */
-            if (dset->tagExistsWithValue(DCM_SpecificCharacterSet, OFTrue /*searchIntoSub*/))
-            {
-                /* convert entire DICOM file or data set to UTF-8 encoding */
-                status = dfile.convertToUTF8();
-                if (status.bad())
-                {
-                    OFLOG_FATAL(dcm2jsonLogger, status.text() << ": converting file to UTF-8: " << ifname);
-                    result = EXITCODE_CANNOT_CONVERT_TO_UNICODE;
-                }
-            }
-            else
-            {
-                if (dset->containsExtendedCharacters(OFFalse /*checkAllStrings*/))
-                {
-                    OFLOG_ERROR(dcm2jsonLogger, OFFIS_CONSOLE_APPLICATION << ": SpecificCharacterSet (0008,0005) element "
-                        << "absent (at all levels of the data set) but extended characters used in file: " << ifname);
-                    result = EXITCODE_CANNOT_CONVERT_TO_UNICODE;
-                }
-            }
+            OFString originalCharset;
+            status = checkAndConvertCharacterSet(ifname, dfile, opt_replaceCharset, opt_defaultCharset, originalCharset, opt_checkAllStrings);
 
-            if (result == 0)
+            if (status.good())
             {
-
                 // look for the SOP instance UID, first in the dataset, then in the metaheader
                 OFString subDir;
                 OFString bulkDir = opt_bulk_dir;
@@ -469,12 +632,21 @@ int main(int argc, char *argv[])
                     STD_NAMESPACE ofstream stream(ofname);
                     if (stream.good())
                     {
-                        /* write content in JSON format to file */
-                        status = writeFile(stream, &dfile, opt_readMode, opt_format, opt_addMetaInformation,
-                            opt_encode_extended, opt_ns_policy, opt_min_bulk_size, bulkURIPrefixWithSubdir.c_str(), bulkDir.c_str());
-                        if (status.bad())
+                        /* check if the file is uncompressed or bulk data is enabled */
+                        if ((opt_min_bulk_size >= 0 ) || dfile.canWriteXfer(EXS_LittleEndianExplicit))
                         {
-                            OFLOG_FATAL(dcm2jsonLogger, status.text() << ": " << ifname);
+                            /* write content in JSON format to file */
+                            status = writeFile(stream, &dfile, opt_readMode, opt_format, opt_addMetaInformation,
+                                opt_encode_extended, opt_ns_policy, opt_min_bulk_size, bulkURIPrefixWithSubdir.c_str(), bulkDir.c_str());
+                            if (status.bad())
+                            {
+                                OFLOG_FATAL(dcm2jsonLogger, status.text() << ": " << ifname);
+                                result = EXITCODE_CANNOT_WRITE_VALID_JSON;
+                            }
+                        }
+                        else
+                        {
+                            OFLOG_FATAL(dcm2jsonLogger, "JSON encoding not supported for encapsulated pixel data: " << ifname);
                             result = EXITCODE_CANNOT_WRITE_VALID_JSON;
                         }
                     }
@@ -483,15 +655,28 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    /* write content in JSON format to standard output */
-                    status = writeFile(COUT, &dfile, opt_readMode, opt_format, opt_addMetaInformation,
-                        opt_encode_extended, opt_ns_policy, opt_min_bulk_size, bulkURIPrefixWithSubdir.c_str(), bulkDir.c_str());
-                    if (status.bad())
+                    /* check if the file is uncompressed or bulk data is enabled */
+                    if ((opt_min_bulk_size >= 0 ) || dfile.canWriteXfer(EXS_LittleEndianExplicit))
                     {
-                        OFLOG_FATAL(dcm2jsonLogger, status.text() << ": " << ifname);
+                        /* write content in JSON format to standard output */
+                        status = writeFile(COUT, &dfile, opt_readMode, opt_format, opt_addMetaInformation,
+                            opt_encode_extended, opt_ns_policy, opt_min_bulk_size, bulkURIPrefixWithSubdir.c_str(), bulkDir.c_str());
+                        if (status.bad())
+                        {
+                            OFLOG_FATAL(dcm2jsonLogger, status.text() << ": " << ifname);
+                            result = EXITCODE_CANNOT_WRITE_VALID_JSON;
+                        }
+                    }
+                    else
+                    {
+                        OFLOG_FATAL(dcm2jsonLogger, "JSON encoding not supported for encapsulated pixel data: " << ifname);
                         result = EXITCODE_CANNOT_WRITE_VALID_JSON;
                     }
                 }
+            }
+            else
+            {
+                result = EXITCODE_CANNOT_CONVERT_TO_UNICODE;
             }
         }
         else

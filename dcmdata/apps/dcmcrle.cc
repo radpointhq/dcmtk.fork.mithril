@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2024, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -64,6 +64,7 @@ int main(int argc, char *argv[])
   OFBool           opt_createOffsetTable = OFTrue;
   OFBool           opt_uidcreation = OFFalse;
   OFBool           opt_secondarycapture = OFFalse;
+  OFBool           opt_iconImagesUnencapsulated = OFFalse;
 
   OFConsoleApplication app(OFFIS_CONSOLE_APPLICATION, "Encode DICOM file to RLE transfer syntax", rcsid);
   OFCommandLine cmd;
@@ -98,6 +99,10 @@ int main(int argc, char *argv[])
     cmd.addSubGroup("basic offset table encoding:");
       cmd.addOption("--offset-table-create", "+ot",    "create offset table (default)");
       cmd.addOption("--offset-table-empty",  "-ot",    "leave offset table empty");
+
+    cmd.addSubGroup("icon image encoding:");
+      cmd.addOption("--icon-compressed",     "+ic",    "compress icon images (default)");
+      cmd.addOption("--icon-uncompressed",   "+iu",    "keep icon images uncompressed");
 
     cmd.addSubGroup("SOP Class UID:");
       cmd.addOption("--class-default",       "+cd",    "keep SOP Class UID (default)");
@@ -195,6 +200,11 @@ int main(int argc, char *argv[])
       cmd.endOptionBlock();
 
       cmd.beginOptionBlock();
+      if (cmd.findOption("--icon-compressed")) opt_iconImagesUnencapsulated = OFFalse;
+      if (cmd.findOption("--icon-uncompressed")) opt_iconImagesUnencapsulated = OFTrue;
+      cmd.endOptionBlock();
+
+      cmd.beginOptionBlock();
       if (cmd.findOption("--class-default")) opt_secondarycapture = OFFalse;
       if (cmd.findOption("--class-sc")) opt_secondarycapture = OFTrue;
       cmd.endOptionBlock();
@@ -238,6 +248,11 @@ int main(int argc, char *argv[])
     // register RLE compression codec
     DcmRLEEncoderRegistration::registerCodecs(opt_uidcreation,
       OFstatic_cast(Uint32, opt_fragmentSize), opt_createOffsetTable, opt_secondarycapture);
+    // RAII guard: deregister the codec on every exit path, including the
+    // error returns below that would otherwise skip the cleanup() call.
+    struct CodecCleanupGuard {
+        ~CodecCleanupGuard() { DcmRLEEncoderRegistration::cleanup(); }
+    } codecCleanupGuard;
 
     /* make sure data dictionary is loaded */
     if (!dcmDataDict.isDictionaryLoaded())
@@ -291,6 +306,7 @@ int main(int argc, char *argv[])
     OFLOG_INFO(dcmcrleLogger, "Convert DICOM file to compressed transfer syntax");
 
     DcmXfer opt_oxferSyn(opt_oxfer);
+    dataset->setIconImageNonEncapsulationFlag(opt_iconImagesUnencapsulated);
 
     if (dataset->chooseRepresentation(opt_oxfer, NULL).good() && dataset->canWriteXfer(opt_oxfer))
     {
@@ -314,8 +330,7 @@ int main(int argc, char *argv[])
 
     OFLOG_INFO(dcmcrleLogger, "conversion successful");
 
-    // deregister RLE codec
-    DcmRLEEncoderRegistration::cleanup();
+    // note: the RLE codec is deregistered by codecCleanupGuard on return
 
     return 0;
 }

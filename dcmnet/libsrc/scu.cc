@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2008-2025, OFFIS e.V.
+ *  Copyright (C) 2008-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -33,8 +33,21 @@
 #include <zlib.h> /* for zlibVersion() */
 #endif
 
+// Define the static logger name array for DcmSCU::TLogger
+OFString DcmSCU::TLogger::m_loggerName[DcmSCU::TLogger::LOGGER_NUM_LOGGERS] = {
+    "dcmtk.dcmnet.scu.cfindrq.dataset",
+    "dcmtk.dcmnet.scu.cfindrsp.dataset",
+    "dcmtk.dcmnet.scu.cstorerq.dataset",
+    "dcmtk.dcmnet.scu.ngetrq.identifierlist",
+    "dcmtk.dcmnet.scu.ngetrsp.dataset",
+    "dcmtk.dcmnet.scu.nactionrq.actioninformation",
+    "dcmtk.dcmnet.scu.nactionrsp.actionreply"
+};
+
+
 DcmSCU::DcmSCU()
-    : m_assoc(NULL)
+    : Logger()
+    , m_assoc(NULL)
     , m_net(NULL)
     , m_params(NULL)
     , m_assocConfigFilename()
@@ -56,6 +69,7 @@ DcmSCU::DcmSCU()
     , m_verbosePCMode(OFFalse)
     , m_datasetConversionMode(OFFalse)
     , m_progressNotificationMode(OFTrue)
+    , m_maxNestingDepth(0)
     , m_secureConnectionEnabled(OFFalse)
     , m_protocolVersion(ASC_AF_Default)
 {
@@ -375,8 +389,8 @@ T_ASC_PresentationContextID DcmSCU::findPresentationContextID(const OFString& ab
      * matching both abstract and transfer syntax
      */
     l  = &m_assoc->params->DULparams.acceptedPresentationContext;
-    pc = (DUL_PRESENTATIONCONTEXT*)LST_Head(l);
-    (void)LST_Position(l, (LST_NODE*)pc);
+    pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Head(l));
+    (void)LST_Position(l, OFstatic_cast(LST_NODE*, pc));
     while (pc && !found)
     {
         found = (strcmp(pc->abstractSyntax, abstractSyntax.c_str()) == 0);
@@ -386,7 +400,7 @@ T_ASC_PresentationContextID DcmSCU::findPresentationContextID(const OFString& ab
         if (found)
             found &= pc->acceptedSCRole == ascRole2dulRole(requestorRole);
         if (!found)
-            pc = (DUL_PRESENTATIONCONTEXT*)LST_Next(l);
+            pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Next(l));
     }
     if (found)
         return pc->presentationContextID;
@@ -413,8 +427,8 @@ T_ASC_PresentationContextID DcmSCU::findAnyPresentationContextID(const OFString&
      * matching both abstract and transfer syntax
      */
     l  = &m_assoc->params->DULparams.acceptedPresentationContext;
-    pc = (DUL_PRESENTATIONCONTEXT*)LST_Head(l);
-    (void)LST_Position(l, (LST_NODE*)pc);
+    pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Head(l));
+    (void)LST_Position(l, OFstatic_cast(LST_NODE*, pc));
     while (pc && !found)
     {
         found = (strcmp(pc->abstractSyntax, abstractSyntax.c_str()) == 0);
@@ -422,36 +436,36 @@ T_ASC_PresentationContextID DcmSCU::findAnyPresentationContextID(const OFString&
         if (!transferSyntax.empty()) // ignore transfer syntax if not specified
             found &= (strcmp(pc->acceptedTransferSyntax, transferSyntax.c_str()) == 0);
         if (!found)
-            pc = (DUL_PRESENTATIONCONTEXT*)LST_Next(l);
+            pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Next(l));
     }
     if (found)
         return pc->presentationContextID;
 
     /* now we look for an explicit VR uncompressed PC. */
     l  = &m_assoc->params->DULparams.acceptedPresentationContext;
-    pc = (DUL_PRESENTATIONCONTEXT*)LST_Head(l);
-    (void)LST_Position(l, (LST_NODE*)pc);
+    pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Head(l));
+    (void)LST_Position(l, OFstatic_cast(LST_NODE*, pc));
     while (pc && !found)
     {
         found = (strcmp(pc->abstractSyntax, abstractSyntax.c_str()) == 0) && (pc->result == ASC_P_ACCEPTANCE)
             && ((strcmp(pc->acceptedTransferSyntax, UID_LittleEndianExplicitTransferSyntax) == 0)
                 || (strcmp(pc->acceptedTransferSyntax, UID_BigEndianExplicitTransferSyntax) == 0));
         if (!found)
-            pc = (DUL_PRESENTATIONCONTEXT*)LST_Next(l);
+            pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Next(l));
     }
     if (found)
         return pc->presentationContextID;
 
     /* now we look for an implicit VR uncompressed PC. */
     l  = &m_assoc->params->DULparams.acceptedPresentationContext;
-    pc = (DUL_PRESENTATIONCONTEXT*)LST_Head(l);
-    (void)LST_Position(l, (LST_NODE*)pc);
+    pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Head(l));
+    (void)LST_Position(l, OFstatic_cast(LST_NODE*, pc));
     while (pc && !found)
     {
         found = (strcmp(pc->abstractSyntax, abstractSyntax.c_str()) == 0) && (pc->result == ASC_P_ACCEPTANCE)
             && (strcmp(pc->acceptedTransferSyntax, UID_LittleEndianImplicitTransferSyntax) == 0);
         if (!found)
-            pc = (DUL_PRESENTATIONCONTEXT*)LST_Next(l);
+            pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Next(l));
     }
     if (found)
         return pc->presentationContextID;
@@ -478,8 +492,8 @@ void DcmSCU::findPresentationContext(const T_ASC_PresentationContextID presID,
      * both abstract and transfer syntax
      */
     l  = &m_assoc->params->DULparams.acceptedPresentationContext;
-    pc = (DUL_PRESENTATIONCONTEXT*)LST_Head(l);
-    (void)LST_Position(l, (LST_NODE*)pc);
+    pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Head(l));
+    (void)LST_Position(l, OFstatic_cast(LST_NODE*, pc));
     while (pc)
     {
         if (presID == pc->presentationContextID)
@@ -492,7 +506,7 @@ void DcmSCU::findPresentationContext(const T_ASC_PresentationContextID presID,
             }
             break;
         }
-        pc = (DUL_PRESENTATIONCONTEXT*)LST_Next(l);
+        pc = OFstatic_cast(DUL_PRESENTATIONCONTEXT*, LST_Next(l));
     }
 }
 
@@ -611,7 +625,7 @@ OFCondition DcmSCU::sendECHORequest(const T_ASC_PresentationContextID presID)
     /* Now, assemble DIMSE message */
     T_DIMSE_Message msg;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&msg, 0, sizeof(msg));
+    memset(OFreinterpret_cast(char*, &msg), 0, sizeof(msg));
     T_DIMSE_C_EchoRQ* req = &(msg.msg.CEchoRQ);
     // Set type of message
     msg.CommandField = DIMSE_C_ECHO_RQ;
@@ -643,7 +657,7 @@ OFCondition DcmSCU::sendECHORequest(const T_ASC_PresentationContextID presID)
     /* Receive response */
     T_DIMSE_Message rsp;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&rsp, 0, sizeof(rsp));
+    memset(OFreinterpret_cast(char*, &rsp), 0, sizeof(rsp));
 
     DcmDataset* statusDetail = NULL;
     cond = receiveDIMSECommand(&pcid, &rsp, &statusDetail, NULL /* not interested in the command set */);
@@ -705,7 +719,7 @@ OFCondition DcmSCU::sendSTORERequest(const T_ASC_PresentationContextID presID,
     DcmDataset* statusDetail         = NULL;
     T_DIMSE_Message msg;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&msg, 0, sizeof(msg));
+    memset(OFreinterpret_cast(char*, &msg), 0, sizeof(msg));
     T_DIMSE_C_StoreRQ* req = &(msg.msg.CStoreRQ);
 
     // Set type of message
@@ -832,6 +846,12 @@ OFCondition DcmSCU::sendSTORERequest(const T_ASC_PresentationContextID presID,
         DCMNET_INFO("Sending C-STORE Request (MsgID " << req->MessageID << ", "
                                                       << dcmSOPClassUIDToModality(sopClassUID.c_str(), "OT") << ")");
     }
+    // Print dataset if related logger is enabled
+    if (Logger.isEnabled(TLogger::LOGGER_C_STORE_RQ_DATASET))
+    {
+        OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_C_STORE_RQ_DATASET], "C-STORE request dataset:" << OFendl
+                    << DcmObject::PrintHelper(*dataset));
+    }
     cond = sendDIMSEMessage(pcid, &msg, dataset);
     delete fileformat;
     fileformat = NULL;
@@ -844,7 +864,7 @@ OFCondition DcmSCU::sendSTORERequest(const T_ASC_PresentationContextID presID,
     /* Receive response */
     T_DIMSE_Message rsp;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&rsp, 0, sizeof(rsp));
+    memset(OFreinterpret_cast(char*, &rsp), 0, sizeof(rsp));
     cond = receiveDIMSECommand(&pcid, &rsp, &statusDetail, NULL /* not interested in the command set */);
     if (cond.bad())
     {
@@ -906,7 +926,7 @@ OFCondition DcmSCU::sendMOVERequest(const T_ASC_PresentationContextID presID,
     T_ASC_PresentationContextID pcid = presID;
     T_DIMSE_Message msg;
     // make sure everything is zeroed (especially options)
-    memset((char*)&msg, 0, sizeof(msg));
+    memset(OFreinterpret_cast(char*, &msg), 0, sizeof(msg));
     DcmDataset* statusDetail = NULL;
     T_DIMSE_C_MoveRQ* req    = &(msg.msg.CMoveRQ);
     // Set type of message
@@ -950,7 +970,7 @@ OFCondition DcmSCU::sendMOVERequest(const T_ASC_PresentationContextID presID,
     {
         T_DIMSE_Message rsp;
         // Make sure everything is zeroed, especially options
-        memset((char*)&rsp, 0, sizeof(rsp));
+        memset(OFreinterpret_cast(char*, &rsp), 0, sizeof(rsp));
         statusDetail = NULL;
 
         // Receive command set
@@ -1074,7 +1094,7 @@ OFCondition DcmSCU::sendCGETRequest(const T_ASC_PresentationContextID presID,
     T_ASC_PresentationContextID pcid = presID;
     T_DIMSE_Message msg;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&msg, 0, sizeof(msg));
+    memset(OFreinterpret_cast(char*, &msg), 0, sizeof(msg));
     T_DIMSE_C_GetRQ* req = &(msg.msg.CGetRQ);
     // Set type of message
     msg.CommandField = DIMSE_C_GET_RQ;
@@ -1128,7 +1148,7 @@ OFCondition DcmSCU::handleCGETSession(const T_ASC_PresentationContextID /* presI
     {
         T_DIMSE_Message rsp;
         // Make sure everything is zeroed (especially options)
-        memset((char*)&rsp, 0, sizeof(rsp));
+        memset(OFreinterpret_cast(char*, &rsp), 0, sizeof(rsp));
 
         DcmDataset* statusDetail         = NULL;
         T_ASC_PresentationContextID pcid = 0;
@@ -1220,9 +1240,13 @@ OFCondition DcmSCU::handleCGETSession(const T_ASC_PresentationContextID /* presI
             // handle bit preserving storage mode, i.e. receive directly to disk
             else if (m_storageMode == DCMSCU_STORAGE_BIT_PRESERVING)
             {
+                // Sanitize SOP Instance UID before using it as part of a filename
+                // to prevent path traversal via malicious peers (see also CVE-2022-2120).
+                OFString uidForFilename = rsp.msg.CStoreRQ.AffectedSOPInstanceUID;
+                OFStandard::sanitizeFilename(uidForFilename);
                 OFString storageFilename;
                 OFStandard::combineDirAndFilename(
-                    storageFilename, m_storageDir, rsp.msg.CStoreRQ.AffectedSOPInstanceUID, OFTrue);
+                    storageFilename, m_storageDir, uidForFilename, OFTrue);
                 result = handleSTORERequestFile(&pcid, storageFilename, &(rsp.msg.CStoreRQ));
                 if (result.good())
                 {
@@ -1384,7 +1408,7 @@ DcmSCU::sendSTOREResponse(T_ASC_PresentationContextID presID, Uint16 status, con
     // Send back response
     T_DIMSE_Message response;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&response, 0, sizeof(response));
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
     T_DIMSE_C_StoreRSP& storeRsp       = response.msg.CStoreRSP;
     response.CommandField              = DIMSE_C_STORE_RSP;
     storeRsp.MessageIDBeingRespondedTo = request.MessageID;
@@ -1439,8 +1463,8 @@ OFCondition DcmSCU::ignoreSTORERequest(T_ASC_PresentationContextID presID, const
 
     /* We cannot create the filestream, so ignore the incoming dataset and return an out-of-resources error to the SCU
      */
-    DIC_UL bytesRead = 0;
-    DIC_UL pdvCount  = 0;
+    Uint64 bytesRead = 0;
+    Uint64 pdvCount  = 0;
     DCMNET_DEBUG("Ignoring incoming C-STORE dataset on presentation context "
                  << OFstatic_cast(unsigned int, presID)
                  << " with Affected SOP Instance UID: " << request.AffectedSOPInstanceUID);
@@ -1482,7 +1506,7 @@ DcmSCU::sendFINDRequest(const T_ASC_PresentationContextID presID, DcmDataset* qu
     T_ASC_PresentationContextID pcid = presID;
     T_DIMSE_Message msg;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&msg, 0, sizeof(msg));
+    memset(OFreinterpret_cast(char*, &msg), 0, sizeof(msg));
 
     DcmDataset* statusDetail = NULL;
     T_DIMSE_C_FindRQ* req    = &(msg.msg.CFindRQ);
@@ -1503,10 +1527,10 @@ DcmSCU::sendFINDRequest(const T_ASC_PresentationContextID presID, DcmDataset* qu
     OFStandard::strlcpy(req->AffectedSOPClassUID, abstractSyntax.c_str(), sizeof(req->AffectedSOPClassUID));
 
     /* Send request */
-    if (DCM_dcmnetLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
+    if (Logger.isEnabled(TLogger::LOGGER_C_FIND_RQ_DATASET))
     {
         DCMNET_INFO("Sending C-FIND Request");
-        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, msg, DIMSE_OUTGOING, queryKeys, pcid));
+        OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_C_FIND_RQ_DATASET], DIMSE_dumpMessage(tempStr, msg, DIMSE_OUTGOING, queryKeys, pcid));
     }
     else
     {
@@ -1525,7 +1549,7 @@ DcmSCU::sendFINDRequest(const T_ASC_PresentationContextID presID, DcmDataset* qu
     {
         T_DIMSE_Message rsp;
         // Make sure everything is zeroed (especially options)
-        memset((char*)&rsp, 0, sizeof(rsp));
+        memset(OFreinterpret_cast(char*, &rsp), 0, sizeof(rsp));
 
         statusDetail = NULL;
 
@@ -1582,6 +1606,12 @@ DcmSCU::sendFINDRequest(const T_ASC_PresentationContextID presID, DcmDataset* qu
             if (cond.bad())
                 return DIMSE_BADDATA;
             findRSP->m_dataset = rspDataset;
+            // Print dataset if related logger is enabled
+            if (Logger.isEnabled(TLogger::LOGGER_C_FIND_RSP_DATASET))
+            {
+                OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_C_FIND_RSP_DATASET], "C-FIND response dataset:" << OFendl
+                            << DcmObject::PrintHelper(*findRSP->m_dataset));
+            }
         }
 
         // Handle C-FIND response (has to handle all possible status flags)
@@ -1637,7 +1667,7 @@ OFCondition DcmSCU::sendCANCELRequest(const T_ASC_PresentationContextID presID,
     T_ASC_PresentationContextID pcid = presID;
     T_DIMSE_Message msg;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&msg, 0, sizeof(msg));
+    memset(OFreinterpret_cast(char*, &msg), 0, sizeof(msg));
     T_DIMSE_C_CancelRQ* req = &(msg.msg.CCancelRQ);
     // Set type of message
     msg.CommandField = DIMSE_C_CANCEL_RQ;
@@ -1698,12 +1728,13 @@ OFCondition DcmSCU::sendACTIONRequest(const T_ASC_PresentationContextID presID,
                                       const OFString& sopInstanceUID,
                                       const Uint16 actionTypeID,
                                       DcmDataset* reqDataset,
-                                      Uint16& rspStatusCode)
+                                      Uint16& rspStatusCode,
+                                      const OFString& reqSOPClassUID)
 {
     // Do some basic validity checks
     if (!isConnected())
         return DIMSE_ILLEGALASSOCIATION;
-    if (sopInstanceUID.empty() || (reqDataset == NULL))
+    if (sopInstanceUID.empty())
         return DIMSE_NULLKEY;
 
     // Prepare DIMSE data structures for issuing request
@@ -1712,13 +1743,13 @@ OFCondition DcmSCU::sendACTIONRequest(const T_ASC_PresentationContextID presID,
     T_ASC_PresentationContextID pcid = presID;
     T_DIMSE_Message request;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&request, 0, sizeof(request));
+    memset(OFreinterpret_cast(char*, &request), 0, sizeof(request));
     T_DIMSE_N_ActionRQ& actionReq = request.msg.NActionRQ;
     DcmDataset* statusDetail      = NULL;
 
     request.CommandField   = DIMSE_N_ACTION_RQ;
     actionReq.MessageID    = nextMessageID();
-    actionReq.DataSetType  = DIMSE_DATASET_PRESENT;
+    actionReq.DataSetType  = (reqDataset == NULL) ? DIMSE_DATASET_NULL : DIMSE_DATASET_PRESENT;
     actionReq.ActionTypeID = actionTypeID;
 
     // Determine SOP Class from presentation context
@@ -1726,7 +1757,10 @@ OFCondition DcmSCU::sendACTIONRequest(const T_ASC_PresentationContextID presID,
     findPresentationContext(pcid, abstractSyntax, transferSyntax);
     if (abstractSyntax.empty() || transferSyntax.empty())
         return DIMSE_NOVALIDPRESENTATIONCONTEXTID;
-    OFStandard::strlcpy(actionReq.RequestedSOPClassUID, abstractSyntax.c_str(), sizeof(actionReq.RequestedSOPClassUID));
+    // Use an explicit Requested SOP Class UID if provided (e.g. UPS Push over a
+    // Pull/Watch presentation context); otherwise the abstract syntax.
+    const OFString& reqSOPClass = reqSOPClassUID.empty() ? abstractSyntax : reqSOPClassUID;
+    OFStandard::strlcpy(actionReq.RequestedSOPClassUID, reqSOPClass.c_str(), sizeof(actionReq.RequestedSOPClassUID));
     OFStandard::strlcpy(
         actionReq.RequestedSOPInstanceUID, sopInstanceUID.c_str(), sizeof(actionReq.RequestedSOPInstanceUID));
 
@@ -1734,15 +1768,24 @@ OFCondition DcmSCU::sendACTIONRequest(const T_ASC_PresentationContextID presID,
     if (DCM_dcmnetLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
     {
         DCMNET_INFO("Sending N-ACTION Request");
-        // Output dataset only if trace level is enabled
-        if (DCM_dcmnetLogger.isEnabledFor(OFLogger::TRACE_LOG_LEVEL))
-            DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, request, DIMSE_OUTGOING, reqDataset, pcid));
-        else
-            DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, request, DIMSE_OUTGOING, NULL, pcid));
+        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, request, DIMSE_OUTGOING, NULL, pcid));
     }
     else
     {
         DCMNET_INFO("Sending N-ACTION Request (MsgID " << actionReq.MessageID << ")");
+    }
+    // Log request Action Information if the related logger is enabled
+    if (Logger.isEnabled(TLogger::LOGGER_N_ACTION_RQ_ACTION_INFORMATION))
+    {
+        if (reqDataset == NULL)
+        {
+            OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_ACTION_RQ_ACTION_INFORMATION], "N-ACTION request action information: none");
+        }
+        else
+        {
+            OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_ACTION_RQ_ACTION_INFORMATION], "N-ACTION request action information:" << OFendl
+                        << DcmObject::PrintHelper(*reqDataset));
+        }
     }
     cond = sendDIMSEMessage(pcid, &request, reqDataset);
     if (cond.bad())
@@ -1753,7 +1796,7 @@ OFCondition DcmSCU::sendACTIONRequest(const T_ASC_PresentationContextID presID,
 
     // Receive response
     T_DIMSE_Message response;
-    memset((char*)&response, 0, sizeof(response));
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
     cond = receiveDIMSECommand(&pcid, &response, &statusDetail, NULL /* commandSet */);
     if (cond.bad())
     {
@@ -1805,6 +1848,12 @@ OFCondition DcmSCU::sendACTIONRequest(const T_ASC_PresentationContextID presID,
         if (cond.good())
         {
             DCMNET_WARN("Received unexpected dataset after N-ACTION response, ignoring");
+            // Log response Action Reply if the related logger is enabled
+            if ((tempDataset != NULL) && Logger.isEnabled(TLogger::LOGGER_N_ACTION_RSP_ACTION_REPLY))
+            {
+                OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_ACTION_RSP_ACTION_REPLY], "N-ACTION response action reply:" << OFendl
+                            << DcmObject::PrintHelper(*tempDataset));
+            }
             delete tempDataset;
         }
         else
@@ -1847,7 +1896,7 @@ OFCondition DcmSCU::sendEVENTREPORTRequest(const T_ASC_PresentationContextID pre
     T_ASC_PresentationContextID pcid = presID;
     T_DIMSE_Message request;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&request, 0, sizeof(request));
+    memset(OFreinterpret_cast(char*, &request), 0, sizeof(request));
 
     T_DIMSE_N_EventReportRQ& eventReportReq = request.msg.NEventReportRQ;
     DcmDataset* statusDetail                = NULL;
@@ -1892,7 +1941,7 @@ OFCondition DcmSCU::sendEVENTREPORTRequest(const T_ASC_PresentationContextID pre
     // Receive response
     T_DIMSE_Message response;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&response, 0, sizeof(response));
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
 
     cond = receiveDIMSECommand(&pcid, &response, &statusDetail, NULL /* commandSet */);
     if (cond.bad())
@@ -1977,7 +2026,7 @@ OFCondition DcmSCU::handleEVENTREPORTRequest(DcmDataset*& reqDataset, Uint16& ev
     T_ASC_PresentationContextID presIDdset;
     T_DIMSE_Message request;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&request, 0, sizeof(request));
+    memset(OFreinterpret_cast(char*, &request), 0, sizeof(request));
     T_DIMSE_N_EventReportRQ& eventReportReq = request.msg.NEventReportRQ;
     DcmDataset* dataset                     = NULL;
     DcmDataset* statusDetail                = NULL;
@@ -2063,7 +2112,7 @@ OFCondition DcmSCU::handleEVENTREPORTRequest(DcmDataset*& reqDataset, Uint16& ev
     // Send back response
     T_DIMSE_Message response;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&response, 0, sizeof(response));
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
 
     T_DIMSE_N_EventReportRSP& eventReportRsp = response.msg.NEventReportRSP;
     response.CommandField                    = DIMSE_N_EVENT_REPORT_RSP;
@@ -2125,7 +2174,7 @@ OFCondition DcmSCU::sendNCREATERequest(const T_ASC_PresentationContextID presID,
 
     T_DIMSE_Message request;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&request, 0, sizeof(request));
+    memset(OFreinterpret_cast(char*, &request), 0, sizeof(request));
     request.CommandField        = DIMSE_N_CREATE_RQ;
     T_DIMSE_N_CreateRQ& rqmsg   = request.msg.NCreateRQ;
     rqmsg.MessageID             = nextMessageID();
@@ -2157,7 +2206,7 @@ OFCondition DcmSCU::sendNCREATERequest(const T_ASC_PresentationContextID presID,
 
     T_DIMSE_Message response;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&response, 0, sizeof(response));
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
     DcmDataset* statusDetail = OFnullptr;
 
     T_ASC_PresentationContextID pcid = presID;
@@ -2241,7 +2290,8 @@ OFCondition DcmSCU::sendNSETRequest(const T_ASC_PresentationContextID presID,
     const OFString& requestedSopInstanceUID,
     DcmDataset* modificationList,
     DcmDataset*& attributeList,
-    Uint16& rspStatusCode)
+    Uint16& rspStatusCode,
+    const OFString& reqSOPClassUID)
 {
 
     // Do some basic validity checks
@@ -2257,14 +2307,18 @@ OFCondition DcmSCU::sendNSETRequest(const T_ASC_PresentationContextID presID,
     if (abstractSyntax.empty() || transferSyntax.empty())
         return DIMSE_NOVALIDPRESENTATIONCONTEXTID;
 
+    // Make sure, everything is zeroed (especially options)
     T_DIMSE_Message request;
-    memset((char*)&request, 0, sizeof(request));
+    memset(OFreinterpret_cast(char*, &request), 0, sizeof(request));
     request.CommandField = DIMSE_N_SET_RQ;
     T_DIMSE_N_SetRQ& rqmsg = request.msg.NSetRQ;
     rqmsg.MessageID = nextMessageID();
     rqmsg.DataSetType = DIMSE_DATASET_PRESENT;
 
-    OFStandard::strlcpy(rqmsg.RequestedSOPClassUID, abstractSyntax.c_str(), sizeof(rqmsg.RequestedSOPClassUID));
+    // Use an explicit Requested SOP Class UID if provided (e.g. UPS Push over a
+    // Pull presentation context); otherwise the abstract syntax.
+    const OFString& reqSOPClass = reqSOPClassUID.empty() ? abstractSyntax : reqSOPClassUID;
+    OFStandard::strlcpy(rqmsg.RequestedSOPClassUID, reqSOPClass.c_str(), sizeof(rqmsg.RequestedSOPClassUID));
     OFStandard::strlcpy(rqmsg.RequestedSOPInstanceUID, requestedSopInstanceUID.c_str(), sizeof(rqmsg.RequestedSOPInstanceUID));
 
     OFString tempStr;
@@ -2289,7 +2343,7 @@ OFCondition DcmSCU::sendNSETRequest(const T_ASC_PresentationContextID presID,
 
     T_DIMSE_Message response;
     // Make sure everything is zeroed (especially options)
-    memset((char*)&response, 0, sizeof(response));
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
     DcmDataset* statusDetail = OFnullptr;
 
     T_ASC_PresentationContextID pcid = presID;
@@ -2370,6 +2424,179 @@ OFCondition DcmSCU::sendNSETRequest(const T_ASC_PresentationContextID presID,
     return EC_Normal;
 }
 
+OFCondition DcmSCU::sendNGETRequest(const T_ASC_PresentationContextID presID,
+                                    const OFString& requestedSopInstanceUID,
+                                    const OFList<DcmTagKey>& attributeIdentifierList,
+                                    DcmDataset*& attributeList,
+                                    Uint16& rspStatusCode,
+                                    const OFString& reqSOPClassUID)
+{
+    if (!isConnected())
+        return DIMSE_ILLEGALASSOCIATION;
+
+    if (requestedSopInstanceUID.empty())
+        return DIMSE_NULLKEY;
+
+    OFString abstractSyntax, transferSyntax;
+    findPresentationContext(presID, abstractSyntax, transferSyntax);
+    if (abstractSyntax.empty() || transferSyntax.empty())
+        return DIMSE_NOVALIDPRESENTATIONCONTEXTID;
+
+    // Build the AttributeIdentifierList as a flat array of (group, element) DIC_US pairs.
+    // The DIMSE layer expects ListCount to be the total number of DIC_US values (2 per tag).
+    OFVector<DIC_US> attrList;
+    for (OFListConstIterator(DcmTagKey) it = attributeIdentifierList.begin();
+         it != attributeIdentifierList.end(); ++it)
+    {
+        attrList.push_back(OFstatic_cast(DIC_US, it->getGroup()));
+        attrList.push_back(OFstatic_cast(DIC_US, it->getElement()));
+    }
+
+    T_DIMSE_Message request;
+    memset(OFreinterpret_cast(char*, &request), 0, sizeof(request));
+    request.CommandField                      = DIMSE_N_GET_RQ;
+    T_DIMSE_N_GetRQ& rqmsg                    = request.msg.NGetRQ;
+    rqmsg.MessageID                           = nextMessageID();
+    rqmsg.DataSetType                         = DIMSE_DATASET_NULL;
+    rqmsg.AttributeIdentifierList             = attrList.empty() ? OFnullptr : &attrList[0];
+    rqmsg.ListCount                           = OFstatic_cast(int, attrList.size());
+
+    // Use an explicit Requested SOP Class UID if provided (e.g. UPS Push over a
+    // Pull presentation context); otherwise the abstract syntax.
+    const OFString& reqSOPClass = reqSOPClassUID.empty() ? abstractSyntax : reqSOPClassUID;
+    OFStandard::strlcpy(rqmsg.RequestedSOPClassUID, reqSOPClass.c_str(), sizeof(rqmsg.RequestedSOPClassUID));
+    OFStandard::strlcpy(rqmsg.RequestedSOPInstanceUID, requestedSopInstanceUID.c_str(), sizeof(rqmsg.RequestedSOPInstanceUID));
+
+    OFString tempStr;
+    if (DCM_dcmnetLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
+    {
+        DCMNET_INFO("Sending N-GET Request");
+        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, request, DIMSE_OUTGOING, OFnullptr, presID));
+    }
+    else
+    {
+        DCMNET_INFO("Sending N-GET Request (MsgID " << rqmsg.MessageID << ")");
+    }
+    // Log attribute identifier list if the related logger is enabled
+    if (Logger.isEnabled(TLogger::LOGGER_N_GET_RQ_IDENTIFIER_LIST))
+    {
+        if (attributeIdentifierList.empty())
+        {
+            OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_GET_RQ_IDENTIFIER_LIST],
+                        "N-GET request attribute identifier list: none");
+        }
+        else
+        {
+            OFOStringStream oss;
+            oss << "N-GET request attribute identifier list:";
+            OFListConstIterator(DcmTagKey) it = attributeIdentifierList.begin();
+            for (; it != attributeIdentifierList.end(); ++it)
+                oss << OFendl << "  " << *it << " " << DcmTag(*it).getTagName();
+            OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_GET_RQ_IDENTIFIER_LIST], oss.str().c_str());
+        }
+    }
+
+    OFCondition result = sendDIMSEMessage(presID, &request, OFnullptr);
+    if (result.bad())
+    {
+        DCMNET_ERROR("Failed sending N-GET request: " << DimseCondition::dump(tempStr, result));
+        return result;
+    }
+
+    T_DIMSE_Message response;
+    memset(OFreinterpret_cast(char*, &response), 0, sizeof(response));
+    DcmDataset* statusDetail = OFnullptr;
+
+    T_ASC_PresentationContextID pcid = presID;
+    result = receiveDIMSECommand(&pcid, &response, &statusDetail, OFnullptr);
+
+    rspStatusCode = response.msg.NGetRSP.DimseStatus;
+
+    if (result.bad())
+    {
+        delete statusDetail;
+        DCMNET_ERROR("Failed receiving DIMSE response: " << DimseCondition::dump(tempStr, result));
+        return result;
+    }
+
+    if (response.CommandField == DIMSE_N_GET_RSP)
+    {
+        if (DCM_dcmnetLogger.isEnabledFor(OFLogger::DEBUG_LOG_LEVEL))
+        {
+            DCMNET_INFO("Received N-GET Response");
+            DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, response, DIMSE_INCOMING, OFnullptr, pcid));
+        }
+        else
+        {
+            DCMNET_INFO("Received N-GET Response (" << DU_ngetStatusString(rspStatusCode) << ")");
+        }
+    }
+    else
+    {
+        DCMNET_ERROR("Expected N-GET response but received DIMSE command 0x"
+            << STD_NAMESPACE hex << STD_NAMESPACE setfill('0') << STD_NAMESPACE setw(4)
+            << OFstatic_cast(unsigned int, response.CommandField));
+        DCMNET_DEBUG(DIMSE_dumpMessage(tempStr, response, DIMSE_INCOMING, OFnullptr, pcid));
+        delete statusDetail;
+        return DIMSE_BADCOMMANDTYPE;
+    }
+
+    if (statusDetail != OFnullptr)
+    {
+        DCMNET_DEBUG("Response has status detail:" << OFendl << DcmObject::PrintHelper(*statusDetail));
+        delete statusDetail;
+    }
+
+    if (pcid != presID)
+    {
+        DCMNET_ERROR("Presentation Context ID of command (" << OFstatic_cast(unsigned int, presID) << ") and data set ("
+            << OFstatic_cast(unsigned int, pcid) << ") differ");
+        return makeDcmnetCondition(DIMSEC_INVALIDPRESENTATIONCONTEXTID,
+            OF_error,
+            "DIMSE: Presentation Contexts of Command and Data Set differ");
+    }
+
+    if (response.msg.NGetRSP.DataSetType != DIMSE_DATASET_NULL)
+    {
+        DcmDataset* respDataset = OFnullptr;
+        result = receiveDIMSEDataset(&pcid, &respDataset);
+        if (result.bad())
+        {
+            delete respDataset;
+            DCMNET_ERROR(DIMSE_dumpMessage(tempStr, request, DIMSE_INCOMING, OFnullptr, pcid));
+            return DIMSE_BADDATA;
+        }
+
+        if (presID != pcid)
+        {
+            delete respDataset;
+            DCMNET_ERROR("Presentation Context ID of command (" << OFstatic_cast(unsigned int, presID) << ") and data set ("
+                << OFstatic_cast(unsigned int, pcid) << ") differ");
+            return makeDcmnetCondition(DIMSEC_INVALIDPRESENTATIONCONTEXTID,
+                OF_error,
+                "DIMSE: Presentation Contexts of Command and Data Set differ");
+        }
+
+        attributeList = respDataset;
+        // Print response dataset if related logger is enabled
+        if (Logger.isEnabled(TLogger::LOGGER_N_GET_RSP_DATASET))
+        {
+            if (attributeList->isEmpty())
+            {
+                OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_GET_RSP_DATASET],
+                            "N-GET response attribute list: none");
+            }
+            else
+            {
+                OFLOG_DEBUG(DcmSCU::Logger[TLogger::LOGGER_N_GET_RSP_DATASET], "N-GET response attribute list:" << OFendl
+                        << DcmObject::PrintHelper(*attributeList));
+            }
+        }
+    }
+
+    return EC_Normal;
+}
+
 OFCondition
 DcmSCU::handleSessionResponseDefault(const Uint16 dimseStatus, const OFString& message, OFBool& waitForNextResponse)
 {
@@ -2404,12 +2631,12 @@ DcmSCU::handleSessionResponseDefault(const Uint16 dimseStatus, const OFString& m
 /*                         General message handling                          */
 /* ************************************************************************* */
 
-void DcmSCU::notifySENDProgress(const unsigned long byteCount)
+void DcmSCU::notifySENDProgress(const Uint64 byteCount)
 {
     DCMNET_TRACE("Bytes sent: " << byteCount);
 }
 
-void DcmSCU::notifyRECEIVEProgress(const unsigned long byteCount)
+void DcmSCU::notifyRECEIVEProgress(const Uint64 byteCount)
 {
     DCMNET_TRACE("Bytes received: " << byteCount);
 }
@@ -2500,6 +2727,19 @@ OFCondition DcmSCU::receiveDIMSEDataset(T_ASC_PresentationContextID* presID, Dcm
     if (!isConnected())
         return DIMSE_ILLEGALASSOCIATION;
 
+    /* if a custom nesting depth limit is configured, pre-allocate
+     * the dataset and apply the setting before parsing starts.
+     * DIMSE_receiveDataSetInMemory() will use this dataset instead
+     * of creating a new one internally. */
+    OFBool weAllocated = OFFalse;
+    if (dataObject != NULL && *dataObject == NULL
+        && m_maxNestingDepth != 0)
+    {
+        *dataObject = new DcmDataset();
+        (*dataObject)->setMaxNestingDepth(m_maxNestingDepth);
+        weAllocated = OFTrue;
+    }
+
     OFCondition cond;
     /* call the corresponding DIMSE function to receive the dataset */
     if (m_progressNotificationMode)
@@ -2519,6 +2759,14 @@ OFCondition DcmSCU::receiveDIMSEDataset(T_ASC_PresentationContextID* presID, Dcm
     }
     else
     {
+        /* if we pre-allocated the dataset, clean up on error since
+         * DIMSE_receiveDataSetInMemory() won't delete a dataset
+         * that was passed in by the caller */
+        if (weAllocated && dataObject != NULL)
+        {
+            delete *dataObject;
+            *dataObject = NULL;
+        }
         OFString tempStr;
         DCMNET_ERROR("Unable to receive dataset on presentation context "
                      << OFstatic_cast(unsigned int, *presID) << ": " << DimseCondition::dump(tempStr, cond));
@@ -2605,6 +2853,11 @@ void DcmSCU::setDatasetConversionMode(const OFBool mode)
 void DcmSCU::setProgressNotificationMode(const OFBool mode)
 {
     m_progressNotificationMode = mode;
+}
+
+void DcmSCU::setMaxNestingDepth(const Sint32 maxDepth)
+{
+    m_maxNestingDepth = maxDepth;
 }
 
 void DcmSCU::setProtocolVersion(T_ASC_ProtocolFamily protocolVersion)
@@ -2694,6 +2947,11 @@ OFBool DcmSCU::getProgressNotificationMode() const
     return m_progressNotificationMode;
 }
 
+Sint32 DcmSCU::getMaxNestingDepth() const
+{
+    return m_maxNestingDepth;
+}
+
 OFCondition DcmSCU::getDatasetInfo(DcmDataset* dataset,
                                    OFString& sopClassUID,
                                    OFString& sopInstanceUID,
@@ -2726,13 +2984,13 @@ OFCondition DcmSCU::getDatasetInfo(DcmDataset* dataset,
 /*                            Callback functions                             */
 /* ************************************************************************* */
 
-void DcmSCU::callbackSENDProgress(void* callbackContext, const unsigned long byteCount)
+void DcmSCU::callbackSENDProgress(void* callbackContext, Uint64 byteCount)
 {
     if (callbackContext != NULL)
         OFreinterpret_cast(DcmSCU*, callbackContext)->notifySENDProgress(byteCount);
 }
 
-void DcmSCU::callbackRECEIVEProgress(void* callbackContext, const unsigned long byteCount)
+void DcmSCU::callbackRECEIVEProgress(void* callbackContext, Uint64 byteCount)
 {
     if (callbackContext != NULL)
         OFreinterpret_cast(DcmSCU*, callbackContext)->notifyRECEIVEProgress(byteCount);
@@ -2748,4 +3006,69 @@ void RetrieveResponse::print()
     DCMNET_INFO("  Number of Completed Suboperations : " << m_numberOfCompletedSubops);
     DCMNET_INFO("  Number of Failed Suboperations    : " << m_numberOfFailedSubops);
     DCMNET_INFO("  Number of Warning Suboperations   : " << m_numberOfWarningSubops);
+}
+
+
+/* ************************************************************************* */
+/*                          class DcmSCU::TLogger                            */
+/* ************************************************************************* */
+
+// Default constructor, initializes logger names and sets defaults for enabled states
+DcmSCU::TLogger::TLogger()
+{
+    m_loggerEnabled[LOGGER_C_FIND_RQ_DATASET]              = OFTrue;
+    m_loggerEnabled[LOGGER_C_FIND_RSP_DATASET]             = OFFalse;
+    m_loggerEnabled[LOGGER_C_STORE_RQ_DATASET]             = OFFalse;
+    m_loggerEnabled[LOGGER_N_GET_RQ_IDENTIFIER_LIST]       = OFTrue;
+    m_loggerEnabled[LOGGER_N_GET_RSP_DATASET]              = OFFalse;
+    m_loggerEnabled[LOGGER_N_ACTION_RQ_ACTION_INFORMATION] = OFTrue;
+    m_loggerEnabled[LOGGER_N_ACTION_RSP_ACTION_REPLY]      = OFFalse;
+}
+
+// Access logger names by enum value
+const OFString& DcmSCU::TLogger::operator[](const E_LOGGER logger) const
+{
+    return m_loggerName[logger];
+}
+
+// Check if a logger is enabled
+OFBool DcmSCU::TLogger::isEnabled(const E_LOGGER logger) const
+{
+    if (logger < LOGGER_NUM_LOGGERS)
+    {
+        return m_loggerEnabled[logger];
+    }
+    else if (logger == LOGGER_NUM_LOGGERS)
+    {
+        for (int i = 0; i < LOGGER_NUM_LOGGERS; ++i)
+        {
+            if (!m_loggerEnabled[i])
+                return OFFalse;
+        }
+        return OFTrue;
+    }
+    else
+    {
+        DCMNET_WARN("DcmSCU::TLogger::isEnabled(): Invalid logger enum value ");
+    }
+    return OFFalse;
+}
+
+// Enable or disable a logger
+void DcmSCU::TLogger::setEnabled(const E_LOGGER logger, const OFBool enabled)
+{
+    if (logger < LOGGER_NUM_LOGGERS)
+    {
+        m_loggerEnabled[logger] = enabled;
+    }
+    else if (logger == LOGGER_NUM_LOGGERS)
+    {
+        for (int i = 0; i < LOGGER_NUM_LOGGERS; ++i)
+        {
+            m_loggerEnabled[i] = enabled;
+        }
+    }
+    else {
+        DCMNET_WARN("DcmSCU::TLogger::setEnabled(): Invalid logger enum value ");
+    }
 }

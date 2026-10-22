@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2012-2025, OFFIS e.V.
+ *  Copyright (C) 2012-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -83,7 +83,11 @@ public:
        */
       virtual void exit();
 
-      /** Restart the worker thread */
+      /** Run the worker again in the calling thread.
+       *  @deprecated This method is no longer called by the pool: each
+       *    worker thread handles exactly one association and terminates
+       *    afterwards. Calling it executes run() in the caller's thread.
+       */
       virtual void rerun();
 
     protected:
@@ -130,7 +134,9 @@ public:
   // Needed to keep MS VC6 happy
   friend class DcmBaseSCPWorker;
 
-  /** Virtual destructor, frees internal memory.
+  /** Virtual destructor, frees internal memory. Note that the destructor
+   *  blocks until listen() has returned (see stopAfterCurrentAssociations())
+   *  and all worker threads have finished their associations.
    */
   virtual ~DcmBaseSCPPool();
 
@@ -152,11 +158,19 @@ public:
   virtual size_t numThreads(const OFBool onlyBusy);
 
   /** Listen for incoming association requests. For each incoming request, a
-   *  new thread is started if number of maximum threads is not reached yet.
-   *  @return DUL_NOASSOCIATIONREQUEST if no connection is requested during
-   *          timeout. Returns other error code if serious error occurs during
-   *          listening. Will not return EC_Normal since listens forever if
-   *          no timeout occurs.
+   *  new worker thread is started if the number of maximum threads is not
+   *  reached yet, otherwise the request is refused ("local limit exceeded").
+   *  Errors while handling a single connection request (e.g.\ temporary
+   *  resource shortage when creating a worker thread) lead to a refusal of
+   *  that request ("temporary congestion") but do not stop the server.
+   *  The method only returns after stopAfterCurrentAssociations() has been
+   *  called (or if network initialization failed). Note that with the
+   *  default blocking connection mode a stop request only takes effect when
+   *  the next connection request arrives; use non-blocking mode (see
+   *  DcmSCPConfig::setConnectionBlockingMode()) together with a connection
+   *  timeout for a pool that should be stoppable at any time.
+   *  @return The error code from network initialization if that failed,
+   *          EC_Normal otherwise.
    */
   virtual OFCondition listen();
 
@@ -168,9 +182,11 @@ public:
    */
   virtual DcmSCPConfig& getConfig();
 
-  /** If enabled, the pool will return from listening for incoming requests
-   *  as soon as the last worker is idle, i.e.\ no worker is handling a DICOM
-   *  association any more.
+  /** Request the pool to stop listening for incoming requests. The listen
+   *  loop will exit when the current call waiting for a connection request
+   *  returns (see listen() about blocking vs.\ non-blocking mode). Workers
+   *  that are still handling an association finish their work; the
+   *  destructor waits for all of them to terminate.
    */
   virtual void stopAfterCurrentAssociations();
 
@@ -230,17 +246,19 @@ private:
   {
     /// Listen for new connections
     LISTEN,
-    /// Reserved for later use
+    /// Stop listening after the current call waiting for a connection returns
     STOP,
     /// Shutting down worker threads
     SHUTDOWN
   };
 
-  /// Mutex that guards the list of busy and idle workers
+  /// Mutex that guards the worker lists, the maximum number of workers and
+  /// the run mode
   OFMutex m_criticalSection;
   /// List of all workers running a connection
   OFList<DcmBaseSCPWorker*> m_workersBusy;
-  /// List of all workers being idle, i.e.\ not running a connection
+  /// List of all workers that have finished their connection and are waiting
+  /// to be joined and deleted (see reapFinishedWorkers())
   OFList<DcmBaseSCPWorker*> m_workersIdle;
 
   /// SCP configuration to be used by pool and all workers
@@ -264,6 +282,23 @@ private:
 
   /// Set m_runMode to SHUTDOWN on return from listen function
   void finishListening();
+
+  /** Join and delete all worker threads that have finished handling their
+   *  association. Called regularly from the listen loop and from the
+   *  destructor, so that resources of terminated threads are reclaimed
+   *  while the pool keeps running.
+   */
+  void reapFinishedWorkers();
+
+  /** Thread-safe read of the current run mode, guarded by m_criticalSection.
+   *  @return the pool's current run mode.
+   */
+  runmode getRunMode();
+
+  /** Thread-safe update of the current run mode, guarded by m_criticalSection.
+   *  @param mode the new run mode to set.
+   */
+  void setRunMode(const runmode mode);
 };
 
 /** Implementation of DICOM SCP server pool. The pool waits for incoming

@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -27,6 +27,19 @@
 #include "dcmtk/dcmdata/dcvrus.h"
 #include "dcmtk/dcmdata/dcvrsh.h"
 #include "dcmtk/dcmiod/iodutil.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_rwvmItemRules;
+    OFMutex                s_rwvmItemMutex;
+}
 
 const OFString FGRealWorldValueMapping::RWVMItem::m_ModuleName = "RealWorldValueMappingItemMacro";
 
@@ -206,26 +219,60 @@ int FGRealWorldValueMapping::RWVMItem::compare(const IODComponent& rhs) const
 
 void FGRealWorldValueMapping::RWVMItem::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_RealWorldValueFirstValueMapped, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RealWorldValueLastValueMapped, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(
-        new IODRule(DCM_DoubleFloatRealWorldValueFirstValueMapped, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-        OFTrue);
-    m_Rules->addRule(
-        new IODRule(DCM_DoubleFloatRealWorldValueLastValueMapped, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE),
-        OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RealWorldValueIntercept, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RealWorldValueSlope, "1", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RealWorldValueLUTData, "1-n", "1C", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_LUTExplanation, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_LUTLabel, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_MeasurementUnitsCodeSequence, "1", "1", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_QuantityDefinitionSequence, "1-n", "3", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
+    s_rwvmItemMutex.lock();
+    if (!s_rwvmItemRules)
+    {
+        s_rwvmItemRules.reset(new IODRules());
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_RealWorldValueFirstValueMapped, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_RealWorldValueLastValueMapped, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_DoubleFloatRealWorldValueFirstValueMapped,
+                        "1",
+                        "1C",
+                        m_ModuleName,
+                        DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_DoubleFloatRealWorldValueLastValueMapped,
+                        "1",
+                        "1C",
+                        m_ModuleName,
+                        DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_RealWorldValueIntercept, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_RealWorldValueSlope, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_RealWorldValueLUTData, "1-n", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_LUTExplanation, "1", "1", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_LUTLabel, "1", "1", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_MeasurementUnitsCodeSequence, "1", "1", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_rwvmItemRules->addRule(
+            new IODRule(DCM_QuantityDefinitionSequence, "1-n", "3", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_rwvmItemMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_rwvmItemRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_rwvmItemRules->begin();
+        while (it != s_rwvmItemRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition FGRealWorldValueMapping::RWVMItem::read(DcmItem& source, const OFBool clearOldData)

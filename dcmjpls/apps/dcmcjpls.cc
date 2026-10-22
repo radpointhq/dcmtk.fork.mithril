@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2007-2024, OFFIS e.V.
+ *  Copyright (C) 2007-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -83,6 +83,7 @@ int main(int argc, char *argv[])
   OFBool           opt_createOffsetTable = OFTrue;
   JLS_UIDCreation  opt_uidcreation = EJLSUC_default;
   OFBool           opt_secondarycapture = OFFalse;
+  OFBool           opt_iconImagesUnencapsulated = OFFalse;
 
   // output options
   E_GrpLenEncoding opt_oglenc = EGL_recalcGL;
@@ -163,6 +164,9 @@ LICENSE_FILE_DECLARE_COMMAND_LINE_OPTIONS
     cmd.addSubGroup("basic offset table encoding:");
       cmd.addOption("--offset-table-create",    "+ot",    "create offset table (default)");
       cmd.addOption("--offset-table-empty",     "-ot",    "leave offset table empty");
+    cmd.addSubGroup("icon image encoding:");
+      cmd.addOption("--icon-compressed",     "+ic",    "compress icon images (default)");
+      cmd.addOption("--icon-uncompressed",   "+iu",    "keep icon images uncompressed");
     cmd.addSubGroup("SOP Class UID:");
       cmd.addOption("--class-default",          "+cd",    "keep SOP Class UID (default)");
       cmd.addOption("--class-sc",               "+cs",    "convert to Secondary Capture Image\n(implies --uid-always)");
@@ -354,6 +358,12 @@ LICENSE_FILE_EVALUATE_COMMAND_LINE_OPTIONS
       if (cmd.findOption("--offset-table-empty")) opt_createOffsetTable = OFFalse;
       cmd.endOptionBlock();
 
+      // icon image encoding options
+      cmd.beginOptionBlock();
+      if (cmd.findOption("--icon-compressed")) opt_iconImagesUnencapsulated = OFFalse;
+      if (cmd.findOption("--icon-uncompressed")) opt_iconImagesUnencapsulated = OFTrue;
+      cmd.endOptionBlock();
+
       // SOP Class UID options
       cmd.beginOptionBlock();
       if (cmd.findOption("--class-default")) opt_secondarycapture = OFFalse;
@@ -410,6 +420,12 @@ LICENSE_FILE_EVALUATE_COMMAND_LINE_OPTIONS
       opt_prefer_cooked, opt_fragmentSize, opt_createOffsetTable,
       opt_uidcreation, opt_secondarycapture, opt_interleaveMode, opt_useFFpadding);
 
+    // RAII guard: deregister the codecs on every exit path, including the
+    // error returns below that would otherwise skip the cleanup() call.
+    struct CodecCleanupGuard {
+        ~CodecCleanupGuard() { DJLSEncoderRegistration::cleanup(); }
+    } codecCleanupGuard;
+
     /* make sure data dictionary is loaded */
     if (!dcmDataDict.isDictionaryLoaded())
     {
@@ -464,7 +480,8 @@ LICENSE_FILE_EVALUATE_COMMAND_LINE_OPTIONS
     DJLSRepresentationParameter rp(OFstatic_cast(Uint16, opt_nearlossless_deviation), opt_useLosslessProcess);
     DcmXfer opt_oxferSyn(opt_oxfer);
 
-    // perform decoding process
+    // perform encoding process
+    dataset->setIconImageNonEncapsulationFlag(opt_iconImagesUnencapsulated);
     OFCondition result = dataset->chooseRepresentation(opt_oxfer, &rp);
     if (result.bad())
     {
@@ -493,8 +510,7 @@ LICENSE_FILE_EVALUATE_COMMAND_LINE_OPTIONS
 
     OFLOG_INFO(dcmcjplsLogger, "conversion successful");
 
-    // deregister global codecs
-    DJLSEncoderRegistration::cleanup();
+    // note: the global codecs are deregistered by codecCleanupGuard on return
 
     return 0;
 }

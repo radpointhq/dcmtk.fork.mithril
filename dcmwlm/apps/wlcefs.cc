@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1996-2025, OFFIS e.V.
+ *  Copyright (C) 1996-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -75,9 +75,10 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
     opt_maxPDU( ASC_DEFAULTMAXPDU ), opt_networkTransferSyntax( EXS_Unknown ),
     opt_failInvalidQuery( OFTrue ), opt_singleProcess( OFTrue ),
     opt_forkedChild( OFFalse ), opt_maxAssociations( 50 ), opt_noSequenceExpansion( OFFalse ),
-    opt_enableRejectionOfIncompleteWlFiles( OFTrue ), opt_blockMode(DIMSE_BLOCKING),
+    opt_enableRejectionOfIncompleteWlFiles( OFTrue ), opt_enableAllReturnKeys( OFFalse ),
+    opt_blockMode(DIMSE_BLOCKING),
     opt_dimse_timeout(0), opt_acse_timeout(30), app( NULL ), cmd( NULL ), command_argc( argc ),
-    command_argv(argv), dataSource( dataSourcev )
+    command_argv(argv), dataSource( dataSourcev ), tlsOptions ( NET_ACCEPTOR )
 {
   // Initialize application identification string.
   OFStandard::snprintf(rcsid, sizeof(rcsid), "$dcmtk: %s v%s %s $", applicationName, OFFIS_DCMTK_VERSION, OFFIS_DCMTK_RELEASEDATE );
@@ -132,6 +133,9 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
       cmd->addOption("--return-no-char-set",  "-cs0",    "return no specific character set (default)");
       cmd->addOption("--return-iso-ir-100",   "-cs1",    "return specific character set ISO IR 100");
       cmd->addOption("--keep-char-set",       "-csk",    "return character set provided in file");
+    cmd->addSubGroup("handling of return key attributes:");
+      cmd->addOption("--enable-all-return",   "+ear",    "accept any (non-sequence) attribute on main\ndataset level as return key");
+      cmd->addOption("--disable-all-return",  "-ear",    "accept supported return keys only (default)");
     cmd->addSubGroup("other processing options:");
       cmd->addOption("--no-sq-expansion",     "-nse",    "disable expansion of empty sequences in C-FIND\nrequest messages");
 
@@ -195,6 +199,9 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
       cmd->addOption("--max-pdu",             "-pdu", 1, opt4.c_str(), opt3.c_str());
       cmd->addOption("--disable-host-lookup", "-dhl",    "disable hostname lookup");
 
+  // add TLS specific command line options if (and only if) we are compiling with OpenSSL
+  tlsOptions.addTLSCommandlineOptions(*cmd);
+
   cmd->addGroup("output options:");
     cmd->addSubGroup("general:");
       cmd->addOption("--request-file-path",   "-rfp", 1, "[p]ath: string", "path to store request files to");
@@ -211,7 +218,7 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
       {
         app->printHeader(OFTrue /*print host identifier*/);
         ofConsole.lockCout() << OFendl << "External libraries used:";
-#if !defined(WITH_ZLIB) && !defined(WITH_TCPWRAPPER)
+#if !defined(WITH_OPENSSL) && !defined(WITH_ZLIB) && !defined(WITH_TCPWRAPPER)
         ofConsole.getCout() << " none" << OFendl;
 #else
         ofConsole.getCout() << OFendl;
@@ -219,6 +226,7 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
 #ifdef WITH_ZLIB
         ofConsole.getCout() << "- ZLIB, Version " << zlibVersion() << OFendl;
 #endif
+        tlsOptions.printLibraryVersion();
 #ifdef WITH_TCPWRAPPER
         ofConsole.getCout() << "- LIBWRAP" << OFendl;
 #endif
@@ -226,6 +234,21 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
         exit(0);
       }
     }
+
+    // check if the command line contains the --list-ciphers option
+    if (tlsOptions.listOfCiphersRequested(*cmd))
+    {
+        tlsOptions.printSupportedCiphersuites(*app, COUT);
+        exit(0);
+    }
+
+    // check if the command line contains the --list-profiles option
+    if (tlsOptions.listOfProfilesRequested(*cmd))
+    {
+        tlsOptions.printSupportedTLSProfiles(*app, COUT);
+        exit(0);
+    }
+
     /* command line parameters and options */
     app->checkParam(cmd->getParamAndCheckMinMax(1, opt_port, 1, 65535));
 
@@ -255,6 +278,11 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
     if( cmd->findOption("--return-no-char-set") ) opt_returnedCharacterSet = RETURN_NO_CHARACTER_SET;
     if( cmd->findOption("--return-iso-ir-100") ) opt_returnedCharacterSet = RETURN_CHARACTER_SET_ISO_IR_100;
     if( cmd->findOption("--keep-char-set") ) opt_returnedCharacterSet = RETURN_CHARACTER_SET_FROM_FILE;
+    cmd->endOptionBlock();
+
+    cmd->beginOptionBlock();
+    if( cmd->findOption("--enable-all-return") ) opt_enableAllReturnKeys = OFTrue;
+    if( cmd->findOption("--disable-all-return") ) opt_enableAllReturnKeys = OFFalse;
     cmd->endOptionBlock();
 
     if( cmd->findOption("--no-sq-expansion") ) opt_noSequenceExpansion = OFTrue;
@@ -338,6 +366,8 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
         app->checkDependence("--request-file-format", "--request-file-path", !opt_rfPath.empty());
         app->checkValue(cmd->getValue(opt_rfFormat));
     }
+
+    tlsOptions.parseArguments(*app, *cmd);
   }
 
   // dump application information
@@ -349,6 +379,7 @@ WlmConsoleEngineFileSystem::WlmConsoleEngineFileSystem( int argc, char *argv[], 
 
   // set general parameters in data source object
   dataSource->SetNoSequenceExpansion( opt_noSequenceExpansion );
+  dataSource->SetEnableAllReturnKeys( opt_enableAllReturnKeys );
   dataSource->SetReturnedCharacterSet( opt_returnedCharacterSet );
 
   // set specific parameters in data source object
@@ -393,9 +424,20 @@ int WlmConsoleEngineFileSystem::StartProvidingService()
     return( 1 );
   }
 
+  cond = tlsOptions.createTransportLayer(NULL, NULL, *app, *cmd);
+  if (cond.bad())
+  {
+    // in case something unexpected happened, dump a corresponding message
+    OFLOG_ERROR(wlmscpfsLogger, cond.text());
+
+    // return error
+    return( 1 );
+  }
+
   // start providing the basic worklist management service
   WlmActivityManager *activityManager = new WlmActivityManager(
       dataSource,
+      tlsOptions.getTransportLayer(),
       opt_port,
       opt_refuseAssociation,
       opt_rejectWithoutImplementationUID,

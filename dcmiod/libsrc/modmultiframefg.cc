@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -28,6 +28,21 @@
 #include "dcmtk/dcmdata/dcdeftag.h"
 #include "dcmtk/dcmiod/iodutil.h" // for static helpers
 
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_fgModuleRules;
+    OFMutex                s_fgModuleMutex;
+    OFshared_ptr<IODRules> s_concatInfoRules;
+    OFMutex                s_concatInfoMutex;
+}
+
 const OFString IODMultiFrameFGModule::m_ModuleName = "MultiframeFunctionalGroupsModule";
 
 IODMultiFrameFGModule::IODMultiFrameFGModule(OFshared_ptr<DcmItem> data, OFshared_ptr<IODRules> rules)
@@ -52,11 +67,36 @@ IODMultiFrameFGModule::IODMultiFrameFGModule()
 
 void IODMultiFrameFGModule::resetRules()
 {
-    m_Rules->addRule(new IODRule(DCM_InstanceNumber, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ContentDate, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ContentTime, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_NumberOfFrames, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_RepresentativeFrameNumber, "1", "3", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    s_fgModuleMutex.lock();
+    if (!s_fgModuleRules)
+    {
+        s_fgModuleRules.reset(new IODRules());
+        s_fgModuleRules->addRule(
+            new IODRule(DCM_InstanceNumber, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_fgModuleRules->addRule(
+            new IODRule(DCM_ContentDate, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_fgModuleRules->addRule(
+            new IODRule(DCM_ContentTime, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_fgModuleRules->addRule(
+            new IODRule(DCM_NumberOfFrames, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_fgModuleRules->addRule(
+            new IODRule(DCM_RepresentativeFrameNumber, "1", "3", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_fgModuleMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_fgModuleRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_fgModuleRules->begin();
+        while (it != s_fgModuleRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
     m_ConcatenationInfo.resetRules();
 }
 
@@ -190,16 +230,38 @@ OFString IODMultiFrameFGModule::ConcatenationInfo::getName() const
 
 void IODMultiFrameFGModule::ConcatenationInfo::resetRules()
 {
-    // Concatenation attributes
-    m_Rules->addRule(new IODRule(DCM_ConcatenationFrameOffsetNumber, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ConcatenationUID, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(
-        new IODRule(DCM_SOPInstanceUIDOfConcatenationSource, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE),
-        OFTrue);
-    m_Rules->addRule(new IODRule(DCM_InConcatenationNumber, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_InConcatenationTotalNumber, "1", "3", m_ModuleName, DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
+    s_concatInfoMutex.lock();
+    if (!s_concatInfoRules)
+    {
+        s_concatInfoRules.reset(new IODRules());
+        s_concatInfoRules->addRule(
+            new IODRule(DCM_ConcatenationFrameOffsetNumber, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+        s_concatInfoRules->addRule(
+            new IODRule(DCM_ConcatenationUID, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_concatInfoRules->addRule(
+            new IODRule(DCM_SOPInstanceUIDOfConcatenationSource, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE),
+            OFTrue);
+        s_concatInfoRules->addRule(
+            new IODRule(DCM_InConcatenationNumber, "1", "1C", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_concatInfoRules->addRule(
+            new IODRule(DCM_InConcatenationTotalNumber, "1", "3", m_ModuleName, DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_concatInfoMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_concatInfoRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_concatInfoRules->begin();
+        while (it != s_concatInfoRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition IODMultiFrameFGModule::ConcatenationInfo::getConcatenationFrameOffsetNumber(Uint32& value,

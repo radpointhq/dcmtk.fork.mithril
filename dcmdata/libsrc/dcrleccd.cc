@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2025, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -429,10 +429,23 @@ OFCondition DcmRLECodecDecoder::decode(
                     pixelPointer = imageData8 + sampleOffset + imageBytesAllocated - byte - 1;
                   }
 
-                  // loop through all pixels of the frame
-                  for (pixel = 0; pixel < bytesPerStripe; ++pixel)
+                  // copy the pixel data that was decoded
+                  const size_t decoderSize = rledecoder.size();
+                  for (pixel = 0; pixel < decoderSize; ++pixel)
                   {
                     *pixelPointer = *outputBuffer++;
+                    pixelPointer += offsetBetweenSamples;
+                  }
+                  // and fill the remainder of the image with copies of the last decoded pixel;
+                  // the output buffer of the RLE decoder is not initialized, so the bytes
+                  // beyond the decoded data must never be copied. If the stripe decoded to no
+                  // data at all, there is no last pixel to copy and reading *(outputBuffer - 1)
+                  // would access memory before the buffer, so use zero. This is the same
+                  // handling as in decodeFrame().
+                  const Uint8 lastPixelValue = (decoderSize > 0) ? *(outputBuffer - 1) : 0;
+                  for (pixel = OFstatic_cast(Uint32, decoderSize); pixel < bytesPerStripe; ++pixel)
+                  {
+                    *pixelPointer = lastPixelValue;
                     pixelPointer += offsetBetweenSamples;
                   }
                 }
@@ -575,6 +588,12 @@ OFCondition DcmRLECodecDecoder::decodeFrame(
        return result;
 
     fragmentLength = pixItem->getLength();
+    if (fragmentLength < 64)
+    {
+      DCMDATA_ERROR("Pixel item shorter than 64 bytes, RLE header incomplete.");
+      return EC_CannotChangeRepresentation;
+    }
+
     result = pixItem->getUint8Array(rleData);
     if (result.bad())
        return result;
@@ -730,8 +749,10 @@ OFCondition DcmRLECodecDecoder::decodeFrame(
             *pixelPointer = *outputBuffer++;
             pixelPointer += offsetBetweenSamples;
         }
-        // and fill the remainder of the image with copies of the last decoded pixel
-        const Uint8 lastPixelValue = *(outputBuffer - 1);
+        // and fill the remainder of the image with copies of the last decoded pixel;
+        // if the stripe decoded to no data at all, there is no last pixel to copy and
+        // reading *(outputBuffer - 1) would access memory before the buffer, so use zero
+        const Uint8 lastPixelValue = (decoderSize > 0) ? *(outputBuffer - 1) : 0;
         for (pixel = OFstatic_cast(Uint32, decoderSize); pixel < bytesPerStripe; ++pixel)
         {
             *pixelPointer = lastPixelValue;

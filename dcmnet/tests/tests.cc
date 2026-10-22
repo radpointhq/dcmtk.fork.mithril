@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2012-2022, OFFIS e.V.
+ *  Copyright (C) 2012-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -25,9 +25,16 @@
 
 OFTEST_REGISTER(dcmnet_dimseDump_nullByte);
 OFTEST_REGISTER(dcmnet_dimseStatusClass);
+OFTEST_REGISTER(dcmnet_parseAssociate_extNeg_truncated);
+OFTEST_REGISTER(dcmnet_parseAssociate_extNeg_malformed_itemLength);
+OFTEST_REGISTER(dcmnet_parseAssociate_duplicate_userIdentity);
+OFTEST_REGISTER(dcmnet_parseUserIdentity_secondaryField_bytesRead);
+OFTEST_REGISTER(dcmnet_parseAssociate_presCtx_malformed_transferSyntax);
 
 #ifdef WITH_THREADS
 OFTEST_REGISTER(dcmnet_scp_pool);
+OFTEST_REGISTER(dcmnet_scp_pool_concurrency);
+OFTEST_REGISTER(dcmnet_scp_pool_error_resilience);
 OFTEST_REGISTER(dcmnet_scp_builtin_verification_support);
 OFTEST_REGISTER(dcmnet_scp_fail_on_invalid_association_configuration);
 OFTEST_REGISTER(dcmnet_scp_fail_on_disallowed_host);
@@ -50,6 +57,23 @@ OFTEST_REGISTER(dcmnet_scu_sendNCREATERequest_succeeds_and_sets_responsestatusco
 OFTEST_REGISTER(dcmnet_scu_sendNSETRequest_fails_when_requestedsopinstance_is_empty);
 OFTEST_REGISTER(dcmnet_scu_sendNSETRequest_succeeds_and_modifies_instance_when_scp_has_instance);
 OFTEST_REGISTER(dcmnet_scu_sendNSETRequest_succeeds_and_sets_responsestatuscode_from_scp_when_scp_sets_error_status);
+
+OFTEST_REGISTER(dcmnet_scu_sendNGETRequest_fails_when_requestedsopinstance_is_empty);
+OFTEST_REGISTER(dcmnet_scu_sendNGETRequest_retrieves_all_attributes_when_list_is_empty);
+OFTEST_REGISTER(dcmnet_scu_sendNGETRequest_retrieves_only_requested_attributes);
+OFTEST_REGISTER(dcmnet_scu_sendNGETRequest_sets_error_status_for_nonexistent_instance);
+
+OFTEST_REGISTER(dcmnet_scu_sendACTIONRequest_fails_when_requestedsopinstance_is_empty);
+OFTEST_REGISTER(dcmnet_scu_sendACTIONRequest_succeeds_when_scp_has_instance);
+OFTEST_REGISTER(dcmnet_scu_sendACTIONRequest_succeeds_without_dataset);
+OFTEST_REGISTER(dcmnet_scu_sendACTIONRequest_sets_error_status_for_nonexistent_instance);
+
+OFTEST_REGISTER(dcmnet_scp_maxNestingDepth_getset);
+OFTEST_REGISTER(dcmnet_scu_maxNestingDepth_getset);
+OFTEST_REGISTER(dcmnet_scp_maxNestingDepth_rejects_deep);
+OFTEST_REGISTER(dcmnet_scp_maxNestingDepth_accepts_shallow);
+
+OFTEST_REGISTER(dcmnet_scp_assocRQ_zeroTransferSyntax_no_leak);
 
 #endif // WITH_THREADS
 

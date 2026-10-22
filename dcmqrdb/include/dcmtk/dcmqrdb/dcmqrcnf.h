@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1993-2022, OFFIS e.V.
+ *  Copyright (C) 1993-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -304,6 +304,13 @@ public:
    *  Return : true if storage area is writable
    */
   OFBool writableStorageArea(const char *aeTitle) const;
+
+  /*
+   *  check if given storage area is readable
+   *  Input : AETitle
+   *  Return : true if storage area is readable (i.e. query/retrieve permitted)
+   */
+  OFBool readableStorageArea(const char *aeTitle) const;
 
   // methods only used by TI
 

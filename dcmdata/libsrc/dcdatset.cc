@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -647,6 +647,9 @@ OFCondition DcmDataset::loadFileUntilTag(const OFFilename &fileName,
         {
             /* use stdin stream */
             DcmStdinStream inStream;
+            /* apply configured nesting depth limit */
+            if (getMaxNestingDepth() > 0)
+                inStream.setMaxNestingDepth(getMaxNestingDepth());
 
             /* clear this object */
             l_error = clear();
@@ -670,6 +673,9 @@ OFCondition DcmDataset::loadFileUntilTag(const OFFilename &fileName,
         } else {
             /* open file for input */
             DcmInputFileStream fileStream(fileName);
+            /* apply configured nesting depth limit */
+            if (getMaxNestingDepth() > 0)
+                fileStream.setMaxNestingDepth(getMaxNestingDepth());
 
             /* check stream status */
             l_error = fileStream.status();
@@ -743,6 +749,7 @@ OFCondition DcmDataset::chooseRepresentation(const E_TransferSyntax repType,
 {
     OFCondition l_error = EC_Normal;
     OFBool pixelDataEncountered = OFFalse;
+    OFBool pixelURLEncountered = OFFalse;
     OFStack<DcmStack> pixelStack;
     DcmXfer torep(repType);
     DcmXfer fromrep(CurrentXfer);
@@ -750,57 +757,81 @@ OFCondition DcmDataset::chooseRepresentation(const E_TransferSyntax repType,
     DcmStack resultStack;
     resultStack.push(this);
 
-    // check if we are attempting to compress but the image contains
-    // floating point or double floating point pixel data, which our codecs don't support.
+    // check if we are attempting to compress or decompress, but the image contains
+    // floating point or double floating point pixel data, which our codecs don't
+    // support
     if ((tagExists(DCM_FloatPixelData, OFTrue) || tagExists(DCM_DoubleFloatPixelData, OFTrue)) &&
          (fromrep.isPixelDataCompressed() || torep.isPixelDataCompressed()))
     {
         DCMDATA_ERROR("DcmDataset: Unable to compress/decompress floating point pixel data, cannot change representation");
-        l_error = EC_CannotChangeRepresentation;
-        return l_error;
+        return EC_CannotChangeRepresentation;
     }
 
-    // check if we are attempting to convert a dataset containing
-    // a pixel data URL. In that case we only continue if the target
-    // transfer syntax also uses a pixel data URL.
-    if (tagExists(DCM_PixelDataProviderURL, OFTrue))
+    // Check if we are attempting to convert a data set containing a pixel data
+    // provider URL in the top-level data set (i.e., from "Image Pixel Module").
+    // In that case, we only continue if the target transfer syntax also requires
+    // a pixel data provider URL.
+    if (tagExists(DCM_PixelDataProviderURL, OFFalse /*searchIntoSub*/))
     {
-      if (! torep.usesReferencedPixelData())
-      {
-        DCMDATA_ERROR("DcmDataset: Unable to compress image containing a pixel data provider URL, cannot change representation");
-        l_error = EC_CannotChangeRepresentation;
-        return l_error;
-      }
+        if (fromrep.usesReferencedPixelData())
+        {
+            if (torep.usesReferencedPixelData())
+            {
+                // remember that we found a pixel data provider URL element
+                pixelURLEncountered = OFTrue;
+            } else {
+                DCMDATA_ERROR("DcmDataset: Unable to " << (torep.isPixelDataCompressed() ? "compress" : "decompress")
+                    << " image containing a pixel data provider URL in the top-level data set, cannot change representation");
+                return EC_CannotChangeRepresentation;
+            }
+        } else {
+            // ignore the pixel data provider URL since the source transfer syntax
+            // does not allow it (not one of the JPIP referenced transfer syntaxes)
+            DCMDATA_WARN("DcmDataset: Ignoring pixel data provider URL in a data set with transfer syntax \""
+                << fromrep.getXferName() << "\"");
+        }
     }
 
-    // Now search for all PixelData elements in this dataset
+    // Now, search for all pixel data elements in this data set. If successful,
+    // the 'resultStack' contains at least two pointers: one to the pixel data
+    // element and one to the item or data set this element is contained in.
     while (search(DCM_PixelData, resultStack, ESM_afterStackTop, OFTrue).good() && l_error.good())
     {
         pixelDataEncountered = OFTrue;
         if (resultStack.top()->ident() == EVR_PixelData)
         {
-            DcmPixelData *pixelData = OFstatic_cast(DcmPixelData *, resultStack.top());
-            if (!pixelData->canChooseRepresentation(repType, repParam))
+            // if there are both pixel data and pixel data provider URL elements
+            // in the top-level data set, return with an error
+            if (pixelURLEncountered && (resultStack.elem(1)->ident() == EVR_dataset))
+            {
+                DCMDATA_ERROR("DcmDataset: Found both pixel data and pixel data provider URL in the top-level data set,"
+                    << " cannot change representation");
                 l_error = EC_CannotChangeRepresentation;
-            pixelStack.push(resultStack);
+            } else {
+                // check whether changing the encoding of the pixel data element would work
+                DcmPixelData *pixelData = OFstatic_cast(DcmPixelData *, resultStack.top());
+                if (!pixelData->canChooseRepresentation(repType, repParam))
+                    l_error = EC_CannotChangeRepresentation;
+                pixelStack.push(resultStack);
+            }
         } else {
-            /* something is fishy with the pixel data element (wrong class) */
+            // something is fishy with the pixel data element (wrong class)
             DCMDATA_ERROR("DcmDataset: Wrong class for pixel data element, cannot change representation");
             l_error = EC_CannotChangeRepresentation;
         }
     }
 
-    // If there are no pixel data elements in the dataset, issue a warning
-    if (! pixelDataEncountered)
+    // if there are no pixel data elements in the data set, issue a warning
+    if (!pixelDataEncountered)
     {
-      if (torep.isPixelDataCompressed() && fromrep.isPixelDataUncompressed())
-      {
-        DCMDATA_WARN("DcmDataset: No pixel data present, nothing to compress");
-      }
-      if (torep.isPixelDataUncompressed() && fromrep.isPixelDataCompressed())
-      {
-        DCMDATA_WARN("DcmDataset: No pixel data present, nothing to decompress");
-      }
+        if (torep.isPixelDataCompressed() && fromrep.isPixelDataUncompressed())
+        {
+            DCMDATA_WARN("DcmDataset: No pixel data present, nothing to compress");
+        }
+        if (torep.isPixelDataUncompressed() && fromrep.isPixelDataCompressed())
+        {
+            DCMDATA_WARN("DcmDataset: No pixel data present, nothing to decompress");
+        }
     }
 
     // then call the method doing the real work for all pixel data elements found
@@ -810,9 +841,9 @@ OFCondition DcmDataset::chooseRepresentation(const E_TransferSyntax repType,
             chooseRepresentation(repType, repParam, pixelStack.top());
 
 #ifdef PIXELSTACK_MEMORY_LEAK_WORKAROUND
-        // on certain platforms there seems to be a memory leak
-        // at this point since for some reason pixelStack.pop does
-        // not completely destruct the DcmStack object taken from the stack.
+        // On certain platforms there seems to be a memory leak at this point
+        // since for some reason pixelStack.pop() does not completely destruct
+        // the DcmStack object taken from the stack.
         // The following work-around should solve this issue.
         pixelStack.top().clear();
 #endif
@@ -894,12 +925,12 @@ OFCondition DcmDataset::doPostReadChecks()
           {
               if (dcmUseExplLengthPixDataForEncTS.get() == OFFalse /* default case */)
               {
-                  /* length of top level dataset's Pixel Data is explicitly */
+                  /* length of top-level dataset's Pixel Data is explicitly */
                   /* defined but we have a transfer syntax requiring */
                   /* encapsulated pixel data (always encoded with undefined */
                   /* length). Print and return an error. */
-                  DCMDATA_ERROR("Found explicit length Pixel Data in top level "
-                      << "dataset with transfer syntax " << xf.getXferName()
+                  DCMDATA_ERROR("Found explicit length Pixel Data in top-level "
+                      << "data set with transfer syntax " << xf.getXferName()
                       << ": Only undefined length permitted");
                   result = EC_PixelDataExplLengthIllegal;
               }
@@ -908,8 +939,8 @@ OFCondition DcmDataset::doPostReadChecks()
                   /* Only print warning if requested by related OFGlobal, */
                   /* and behave like as we have the same case as for an */
                   /* icon image, which is always uncompressed (see above). */
-                  DCMDATA_WARN("Found explicit length Pixel Data in top level "
-                      << "dataset with transfer syntax " << xf.getXferName()
+                  DCMDATA_WARN("Found explicit length Pixel Data in top-level "
+                      << "data set with transfer syntax " << xf.getXferName()
                       << ": Only undefined length permitted (ignored on explicit request)");
               }
           }
@@ -926,3 +957,21 @@ void DcmDataset::initializeXfer(const E_TransferSyntax xfer)
   OriginalXfer = xfer;
   CurrentXfer = xfer;
 }
+
+// ********************************
+
+void DcmDataset::setIconImageNonEncapsulationFlag(OFBool flag)
+{
+    DcmItem *icon = NULL;
+    if (findAndGetSequenceItem(DCM_IconImageSequence, icon, 0).good() && icon)
+    {
+        // We do have an icon image sequence. Note that we only process the first
+        // sequence item since only a single item is permitted here.
+        DcmElement *iconpx = NULL;
+        if (icon->findAndGetElement(DCM_PixelData, iconpx).good() && iconpx && (iconpx->ident() == EVR_PixelData))
+        {
+            OFstatic_cast(DcmPixelData *, iconpx)->setNonEncapsulationFlag(flag);
+        }
+    }
+}
+

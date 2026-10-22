@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2025, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -232,11 +232,24 @@ static OFString &dicomToHostFilename(const OFString &dicomFilename,
 }
 
 
-// check whether given DICOM file exists
+// check whether given DICOM file exists within the given directory (the file set root)
 static OFBool locateDicomFile(const OFString &dicomFilename,
+                              const OFString &directory,
                               OFString &hostFilename)
 {
-    dicomToHostFilename(dicomFilename, hostFilename);
+    hostFilename.clear();
+    /* make sure that the file ID cannot refer to a file outside of the file set.
+     * Lowercase letters are accepted because a lowercase version of the referenced
+     * file is looked for below, i.e. such file IDs have always been supported here.
+     */
+    if (!DicomDirInterface::isReferencedFileIDSafe(dicomFilename, OFTrue /*allowLowercase*/))
+    {
+        DCMDATA_ERROR("referenced file ID does not denote a file within the file set: " << dicomFilename);
+        return OFFalse;
+    }
+    OFString fileName;
+    dicomToHostFilename(dicomFilename, fileName);
+    OFStandard::combineDirAndFilename(hostFilename, directory, fileName, OFTrue /*allowEmptyDirName*/);
     OFBool result = OFStandard::fileExists(hostFilename);
     if (!result)
     {
@@ -247,7 +260,8 @@ static OFBool locateDicomFile(const OFString &dicomFilename,
     if (!result)
     {
         /* lowercase */
-        dicomToHostFilename(dicomFilename, hostFilename, OFTrue /*mapToLower*/);
+        dicomToHostFilename(dicomFilename, fileName, OFTrue /*mapToLower*/);
+        OFStandard::combineDirAndFilename(hostFilename, directory, fileName, OFTrue /*allowEmptyDirName*/);
         result = OFStandard::fileExists(hostFilename);
         if (!result)
         {
@@ -1477,6 +1491,38 @@ OFBool DicomDirInterface::isFilenameValid(const OFFilename &filename,
         }
     }
     return result;
+}
+
+
+// check whether a Referenced File ID is safe to be used as a relative pathname
+OFBool DicomDirInterface::isReferencedFileIDSafe(const OFString &fileID,
+                                                 const OFBool allowLowercase)
+{
+    const size_t length = fileID.length();
+    if (length == 0)
+        return OFFalse;
+    size_t componentLength = 0;
+    for (size_t i = 0; i < length; ++i)
+    {
+        const char c = fileID[i];
+        // backslash separates components; an empty component is not allowed
+        if (c == '\\')
+        {
+            if (componentLength == 0)
+                return OFFalse;
+            componentLength = 0;
+        }
+        // only uppercase letters, digits and underscore are allowed within a
+        // component (this excludes '.', '/', ':' and space), and lowercase
+        // letters if the caller accepts non-conformant file IDs
+        else if (((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9')) || (c == '_') ||
+                 (allowLowercase && (c >= 'a') && (c <= 'z')))
+            ++componentLength;
+        else
+            return OFFalse;
+    }
+    // reject a trailing backslash (empty last component)
+    return (componentLength > 0);
 }
 
 
@@ -2917,7 +2963,14 @@ OFBool DicomDirInterface::recordMatchesDataset(DcmDirectoryRecord *record,
                     if (!getStringFromDataset(record, DCM_ReferencedFileID, refFilename).empty())
                     {
                         OFString hostFilename;
-                        if (locateDicomFile(refFilename, hostFilename))
+                        /* the file ID is relative to the root of the file set, i.e. to
+                         * the directory in which the DICOMDIR file is located
+                         */
+                        OFString directory;
+                        OFStandard::getDirNameFromPath(directory,
+                            OFSTRING_GUARD(DicomDir->getDirFileName().getCharPointer()),
+                            OFFalse /*assumeDirName*/);
+                        if (locateDicomFile(refFilename, directory, hostFilename))
                         {
                             result = compare(getStringFromFile(hostFilename, DCM_StudyInstanceUID, recordString),
                                              getStringFromDataset(dataset, DCM_StudyInstanceUID, datasetString));
@@ -4479,8 +4532,15 @@ OFBool DicomDirInterface::getIconFromFile(const OFFilename &filename,
                 {
                     unsigned int pgmWidth, pgmHeight = 0;
                     /* skip optional comment line and get width and height */
+                    /* reject dimensions that do not fit into 16 bits: the image scaler truncates
+                     * them to Uint16 (see DicomDirImageImplementation::scaleData()), so larger
+                     * values would cause an out-of-bounds read while scaling; limiting both values
+                     * to 0xffff also ensures that the buffer size computation below (pgmWidth *
+                     * pgmHeight) cannot overflow
+                     */
                     if (((*line != '#') || (file.fgets(line, maxline) != NULL)) &&
-                        (sscanf(line, "%u %u", &pgmWidth, &pgmHeight) > 0) && (pgmWidth > 0) && (pgmHeight > 0))
+                        (sscanf(line, "%u %u", &pgmWidth, &pgmHeight) > 0) &&
+                        (pgmWidth > 0) && (pgmHeight > 0) && (pgmWidth <= 0xffffu) && (pgmHeight <= 0xffffu))
                     {
                         unsigned int pgmMax = 0;
                         /* get maximum gray value */

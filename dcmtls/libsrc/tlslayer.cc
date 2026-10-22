@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1998-2024, OFFIS e.V.
+ *  Copyright (C) 1998-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -1056,22 +1056,29 @@ OFString DcmTLSTransportLayer::dumpX509Certificate(X509 *peerCertificate)
   if (peerCertificate)
   {
     long certVersion = 0;                     /* certificate type */
-    long certSerialNumber = -1;               /* certificate serial number */
+    OFString certSerialNumber;                /* certificate serial number */
     OFString certValidNotBefore;              /* certificate validity - not before */
     OFString certValidNotAfter;               /* certificate validity - not after */
     char certSubjectName[1024];               /* certificate subject name (DN) */
     char certIssuerName[1024];                /* certificate issuer name (DN) */
-    const char *certPubKeyType = "unknown";   /* certificate public key type */
+    OFString certPubKeyType = "unknown";      /* certificate public key type */
     int certPubKeyBits = 0;                   /* certificate number of bits in public key */
     certSubjectName[0]= '\0';
     certIssuerName[0]= '\0';
     certVersion = X509_get_version(peerCertificate) +1;
-    certSerialNumber = ASN1_INTEGER_get(X509_get_serialNumber(peerCertificate));
-    BIO *certValidNotBeforeBIO = BIO_new(BIO_s_mem());
+    BIO *certSerialNumberBIO = BIO_new(BIO_s_mem());
     char *bufptr = NULL;
+    if (certSerialNumberBIO) {
+      i2a_ASN1_INTEGER(certSerialNumberBIO, X509_get0_serialNumber(peerCertificate));
+      BIO_write(certSerialNumberBIO,"\0",1);
+      BIO_get_mem_data(certSerialNumberBIO, OFreinterpret_cast(char *, &bufptr));
+      if (bufptr) certSerialNumber = bufptr;
+      BIO_free(certSerialNumberBIO);
+    }
+    BIO *certValidNotBeforeBIO = BIO_new(BIO_s_mem());
     if (certValidNotBeforeBIO)
     {
-      ASN1_UTCTIME_print(certValidNotBeforeBIO, X509_get_notBefore(peerCertificate));
+      ASN1_TIME_print(certValidNotBeforeBIO, X509_get_notBefore(peerCertificate));
       BIO_write(certValidNotBeforeBIO,"\0",1);
       BIO_get_mem_data(certValidNotBeforeBIO, OFreinterpret_cast(char *, &bufptr));
       if (bufptr) certValidNotBefore = bufptr;
@@ -1081,7 +1088,7 @@ OFString DcmTLSTransportLayer::dumpX509Certificate(X509 *peerCertificate)
     BIO *certValidNotAfterBIO  = BIO_new(BIO_s_mem());
     if (certValidNotAfterBIO)
     {
-      ASN1_UTCTIME_print(certValidNotAfterBIO, X509_get_notAfter(peerCertificate));
+      ASN1_TIME_print(certValidNotAfterBIO, X509_get_notAfter(peerCertificate));
       BIO_write(certValidNotAfterBIO,"\0",1);
       BIO_get_mem_data(certValidNotAfterBIO, OFreinterpret_cast(char *, &bufptr));
       if (bufptr) certValidNotAfter = bufptr;
@@ -1092,7 +1099,8 @@ OFString DcmTLSTransportLayer::dumpX509Certificate(X509 *peerCertificate)
     EVP_PKEY *pubkey = X509_get_pubkey(peerCertificate); // creates copy of public key
     if (pubkey)
     {
-      switch (EVP_PKEY_base_id(pubkey))
+      int pkt_nid = EVP_PKEY_base_id(pubkey);
+      switch (pkt_nid)
       {
         case EVP_PKEY_RSA:
           certPubKeyType = "RSA";
@@ -1104,7 +1112,14 @@ OFString DcmTLSTransportLayer::dumpX509Certificate(X509 *peerCertificate)
           certPubKeyType = "DH";
           break;
         default:
-          /* nothing */
+          if (pkt_nid > 0 && pkt_nid != NID_undef)
+          {
+            const char *pubkeyalg = OBJ_nid2sn(pkt_nid);
+            if (pubkeyalg)
+            {
+              certPubKeyType = pubkeyalg;
+            }
+          }
           break;
       }
       certPubKeyBits = EVP_PKEY_bits(pubkey);

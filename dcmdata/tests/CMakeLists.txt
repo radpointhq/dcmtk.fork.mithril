@@ -2,6 +2,8 @@
 DCMTK_ADD_TEST_EXECUTABLE(dcmdata_tests
   tbytestr.cc
   tchval.cc
+  tcond.cc
+  tdicdir.cc
   tdict.cc
   telemlen.cc
   tfrmsiz.cc
@@ -11,6 +13,7 @@ DCMTK_ADD_TEST_EXECUTABLE(dcmdata_tests
   ti2dbmp.cc
   titem.cc
   tmatch.cc
+  tnesting.cc
   tnewdcme.cc
   tparent.cc
   tparser.cc
@@ -31,7 +34,15 @@ DCMTK_ADD_TEST_EXECUTABLE(dcmdata_tests
   tvrui.cc
   tvruv.cc
   txfer.cc
+  # dcmodify app sources needed for condition check tests (tcond.cc)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../apps/mdfdsman.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../apps/mdfconen.cc
 )
+
+if(BUILD_APPS)
+  # include path for dcmodify app headers (mdfdsman.h, mdfconen.h)
+  target_include_directories(dcmdata_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+ENDIF()
 
 # make sure executables are linked to the corresponding libraries
 DCMTK_TARGET_LINK_MODULES(dcmdata_tests i2d)

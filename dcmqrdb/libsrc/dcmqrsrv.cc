@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1993-2024, OFFIS e.V.
+ *  Copyright (C) 1993-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -159,6 +159,26 @@ OFCondition DcmQueryRetrieveSCP::dispatch(T_ASC_Association *assoc, OFBool corre
             /* did peer release, abort, or do we have a valid message ? */
             if (cond.good())
             {
+                /* Make sure that the command is permitted on the presentation
+                 * context it was received on. The DIMSE layer does not check
+                 * this, so without this test a peer could execute an operation
+                 * on a presentation context that was never negotiated for the
+                 * corresponding SOP class, e.g. send a C-STORE request on a
+                 * Verification presentation context and thereby bypass the
+                 * refusal of all storage presentation contexts that enforces
+                 * the read-only access mode of a storage area.
+                 */
+                if (! checkPresentationContextForCommand(assoc, msg.CommandField, presID))
+                {
+                    DCMQRDB_ERROR("Command 0x" << STD_NAMESPACE hex
+                        << OFstatic_cast(unsigned, msg.CommandField)
+                        << STD_NAMESPACE dec << " not allowed on presentation context with ID "
+                        << OFstatic_cast(unsigned, presID));
+                    /* the condition will be returned, the caller will abort the association. */
+                    cond = DIMSE_BADCOMMANDTYPE;
+                    break;
+                }
+
                 /* process command */
                 switch (msg.CommandField) {
                 case DIMSE_C_ECHO_RQ:
@@ -358,7 +378,25 @@ OFCondition DcmQueryRetrieveSCP::storeSCP(T_ASC_Association * assoc, T_DIMSE_C_S
     OFString temp_str;
     DCMQRDB_INFO("Received Store SCP:" << OFendl << DIMSE_dumpMessage(temp_str, *request, DIMSE_INCOMING));
 
-    if (!dcmIsaStorageSOPClassUID(request->AffectedSOPClassUID)) {
+    DIC_AE calledAETitle;
+    calledAETitle[0] = '\0';
+    ASC_getAPTitles(assoc->params, NULL, 0, calledAETitle, sizeof(calledAETitle), NULL, 0);
+
+    if (!config_->writableStorageArea(calledAETitle)) {
+        /* The storage area is read-only. Storage presentation contexts are
+         * already refused for such an area during association negotiation,
+         * so this should never happen. We check it here nevertheless because
+         * this is the layer at which the access mode is defined, and thus the
+         * only place where the check cannot be circumvented by sending the
+         * request on a presentation context negotiated for another SOP class.
+         */
+        DCMQRDB_ERROR("storeSCP: storage area for AE title '" << calledAETitle
+            << "' is not writable, refusing C-STORE request");
+        /* callback will send back "refused: not authorized" status */
+        context.setStatus(STATUS_STORE_Refused_NotAuthorized);
+        /* must still receive data */
+        OFStandard::strlcpy(imageFileName, NULL_DEVICE_NAME, sizeof(imageFileName));
+    } else if (!dcmIsaStorageSOPClassUID(request->AffectedSOPClassUID)) {
         /* callback will send back sop class not supported status */
         context.setStatus(STATUS_STORE_Refused_SOPClassNotSupported);
         /* must still receive data */
@@ -431,7 +469,7 @@ OFCondition DcmQueryRetrieveSCP::storeSCP(T_ASC_Association * assoc, T_DIMSE_C_S
       /* remove file */
       if (strcmp(imageFileName, NULL_DEVICE_NAME) != 0) // don't try to delete /dev/null
       {
-        DCMQRDB_INFO("Store SCP: Deleting Image File: %s" << imageFileName);
+        DCMQRDB_INFO("Store SCP: Deleting Image File: " << imageFileName);
         OFStandard::deleteFile(imageFileName);
       }
       dbHandle.pruneInvalidRecords();
@@ -451,6 +489,60 @@ OFCondition DcmQueryRetrieveSCP::storeSCP(T_ASC_Association * assoc, T_DIMSE_C_S
 
 
 /* Association negotiation */
+
+OFBool DcmQueryRetrieveSCP::isCommandAllowedForAbstractSyntax(
+  T_DIMSE_Command command,
+  const char *abstractSyntax)
+{
+    if (abstractSyntax == NULL) return OFFalse;
+
+    switch (command)
+    {
+      case DIMSE_C_ECHO_RQ:
+        return (0 == strcmp(abstractSyntax, UID_VerificationSOPClass));
+      case DIMSE_C_STORE_RQ:
+        return dcmIsaStorageSOPClassUID(abstractSyntax);
+      case DIMSE_C_FIND_RQ:
+        return (0 == strcmp(abstractSyntax, UID_FINDPatientRootQueryRetrieveInformationModel)) ||
+               (0 == strcmp(abstractSyntax, UID_FINDStudyRootQueryRetrieveInformationModel)) ||
+               (0 == strcmp(abstractSyntax, UID_RETIRED_FINDPatientStudyOnlyQueryRetrieveInformationModel));
+      case DIMSE_C_MOVE_RQ:
+        return (0 == strcmp(abstractSyntax, UID_MOVEPatientRootQueryRetrieveInformationModel)) ||
+               (0 == strcmp(abstractSyntax, UID_MOVEStudyRootQueryRetrieveInformationModel)) ||
+               (0 == strcmp(abstractSyntax, UID_RETIRED_MOVEPatientStudyOnlyQueryRetrieveInformationModel));
+      case DIMSE_C_GET_RQ:
+        return (0 == strcmp(abstractSyntax, UID_GETPatientRootQueryRetrieveInformationModel)) ||
+               (0 == strcmp(abstractSyntax, UID_GETStudyRootQueryRetrieveInformationModel)) ||
+               (0 == strcmp(abstractSyntax, UID_RETIRED_GETPatientStudyOnlyQueryRetrieveInformationModel));
+      case DIMSE_C_CANCEL_RQ:
+        /* a (late) C-CANCEL request is silently ignored anyway, and it may
+         * legally appear on any presentation context that carries a C-FIND,
+         * C-MOVE or C-GET operation.
+         */
+        return OFTrue;
+      default:
+        /* all other commands are rejected by the caller anyway */
+        return OFFalse;
+    }
+}
+
+
+OFBool DcmQueryRetrieveSCP::checkPresentationContextForCommand(
+  T_ASC_Association *assoc,
+  T_DIMSE_Command command,
+  T_ASC_PresentationContextID presID)
+{
+    T_ASC_PresentationContext pc;
+    if (ASC_findAcceptedPresentationContext(assoc->params, presID, &pc).bad())
+    {
+        /* no accepted presentation context with this ID, so the message
+         * cannot be processed in any case.
+         */
+        return OFFalse;
+    }
+    return isCommandAllowedForAbstractSyntax(command, pc.abstractSyntax);
+}
+
 
 void DcmQueryRetrieveSCP::refuseAnyStorageContexts(T_ASC_Association * assoc)
 {
@@ -476,6 +568,35 @@ void DcmQueryRetrieveSCP::refuseAnyStorageContexts(T_ASC_Association * assoc)
                 }
             }
         } while (pid != 0); // repeat as long as we find presentation contexts for this SOP class - there might be multiple ones.
+    }
+}
+
+
+void DcmQueryRetrieveSCP::refuseAnyQueryRetrieveContexts(T_ASC_Association * assoc)
+{
+    // Query/Retrieve (C-FIND/C-MOVE/C-GET) abstract syntaxes for all supported
+    // information models (patient root, study root, patient/study only).  The
+    // Verification SOP Class is intentionally not included here, so a write-only
+    // storage area can still be checked with C-ECHO.
+    static const char *qrSyntaxes[] =
+    {
+        UID_FINDPatientRootQueryRetrieveInformationModel,
+        UID_MOVEPatientRootQueryRetrieveInformationModel,
+        UID_GETPatientRootQueryRetrieveInformationModel,
+        UID_FINDStudyRootQueryRetrieveInformationModel,
+        UID_MOVEStudyRootQueryRetrieveInformationModel,
+        UID_GETStudyRootQueryRetrieveInformationModel,
+        UID_RETIRED_FINDPatientStudyOnlyQueryRetrieveInformationModel,
+        UID_RETIRED_MOVEPatientStudyOnlyQueryRetrieveInformationModel,
+        UID_RETIRED_GETPatientStudyOnlyQueryRetrieveInformationModel
+    };
+
+    for (int i = 0; i < OFstatic_cast(int, DIM_OF(qrSyntaxes)); i++) {
+        T_ASC_PresentationContextID pid;
+        // there might be multiple presentation contexts for the same SOP class
+        while ((pid = ASC_findAcceptedPresentationContextID(assoc, qrSyntaxes[i])) != 0) {
+            ASC_refusePresentationContext(assoc->params, pid, ASC_P_USERREJECTION);
+        }
     }
 }
 
@@ -931,6 +1052,17 @@ OFCondition DcmQueryRetrieveSCP::negotiateAssociation(T_ASC_Association * assoc)
     if (!config_->writableStorageArea(calledAETitle))
     {
       refuseAnyStorageContexts(assoc);
+    }
+
+    /*
+     * Refuse any "Query/Retrieve" presentation contexts (C-FIND/C-MOVE/C-GET)
+     * to non-readable storage areas, i.e. those configured with "Access W"
+     * (write-only).  This mirrors the storage refusal above and makes "W"
+     * behave as documented: ingestion allowed, query/retrieve refused.
+     */
+    if (!config_->readableStorageArea(calledAETitle))
+    {
+      refuseAnyQueryRetrieveContexts(assoc);
     }
 
     /*

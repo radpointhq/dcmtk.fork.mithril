@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2024, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -134,7 +134,8 @@ OFCondition DSRTimeTreeNode::writeXML(STD_NAMESPACE ostream &stream,
     writeXMLItemStart(stream, flags);
     result = DSRDocumentTreeNode::writeXML(stream, flags);
     /* output time in ISO 8601 format */
-    DcmTime::getISOFormattedTimeFromString(getValue(), tmpString);
+    DcmTime::getISOFormattedTimeFromString(getValue(), tmpString, OFTrue /*seconds*/, OFTrue /*fraction*/,
+        OFFalse /*createMissingPart*/);
     writeStringValueToXML(stream, tmpString, "value", (flags & XF_writeEmptyTags) > 0);
     writeXMLItemEnd(stream, flags);
     return result;
@@ -185,8 +186,12 @@ OFString &DSRTimeTreeNode::getValueFromXMLNodeContent(const DSRXMLDocument &doc,
         {
             OFTime tmpTime;
             /* convert ISO to DICOM format */
-            if (tmpTime.setISOFormattedTime(tmpString))
-                DcmTime::getDicomTimeFromOFTime(tmpTime, timeValue);
+            if (!tmpTime.setISOFormattedTime(tmpString) ||
+                DcmTime::getDicomTimeFromOFTime(tmpTime, timeValue, OFTrue /*seconds*/, OFTrue /*fraction*/).bad())
+            {
+                /* just report a warning, as we cannot return an error status */
+                DCMSR_WARN("Cannot convert ISO formatted time value \"" << tmpString << "\" to DICOM format");
+            }
         }
     }
     return timeValue;

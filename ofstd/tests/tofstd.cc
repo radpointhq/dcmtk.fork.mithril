@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2022, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -373,6 +373,108 @@ OFTEST(ofstd_OFStandard_removeRootDirFromPathname)
     OFCHECK(OFStandard::removeRootDirFromPathname(result, nullPtr, nullPtr).good());
 }
 
+OFTEST(ofstd_OFStandard_sanitizeAETitle)
+{
+    // Pure-ASCII alphanumeric is preserved.
+    OFString s = "MY_AE_42";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, "MY_AE_42");
+
+    // Dots, colons, dashes, '@' are part of the allow list.
+    s = "AE.TITLE:1@host-1";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, "AE.TITLE:1@host-1");
+
+    // Path separators map to underscores.
+    s = "../etc/passwd";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, ".._etc_passwd");
+
+    // Backslash is replaced (Windows path separator).
+    s = "..\\secret";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, ".._secret");
+
+    // Shell metacharacters are replaced.
+    s = "AE;rm -rf /";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, "AE_rm -rf _");
+
+    // Control characters (including NUL inside the string) are replaced.
+    OFString withNul;
+    withNul.append("AB", 2);
+    withNul.append(1, '\0');
+    withNul.append("CD", 2);
+    OFStandard::sanitizeAETitle(withNul);
+    OFCHECK_EQUAL(withNul, OFString("AB_CD"));
+
+    // High-range bytes (>= 0x7F) are replaced.
+    OFString withHigh;
+    withHigh.append("AE", 2);
+    withHigh.append(1, '\xff');
+    OFStandard::sanitizeAETitle(withHigh);
+    OFCHECK_EQUAL(withHigh, OFString("AE_"));
+
+    // A surrounding quotation-mark pair is preserved (storescp behaviour).
+    s = "\"../bad\"";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, "\".._bad\"");
+
+    // Empty string and length-1 string are handled without crashing.
+    s = "";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, "");
+    s = "/";
+    OFStandard::sanitizeAETitle(s);
+    OFCHECK_EQUAL(s, "_");
+}
+
+OFTEST(ofstd_OFStandard_sanitizeFilename)
+{
+    // Alphanumerics and the allow-listed punctuation ('-', '.') are preserved.
+    OFString s = "IMG-001.dcm";
+    OFStandard::sanitizeFilename(s);
+    OFCHECK_EQUAL(s, "IMG-001.dcm");
+
+    // Path separators map to underscores.
+    s = "../etc/passwd";
+    OFStandard::sanitizeFilename(s);
+    OFCHECK_EQUAL(s, ".._etc_passwd");
+
+    // Backslash (Windows path separator) is replaced.
+    s = "..\\secret";
+    OFStandard::sanitizeFilename(s);
+    OFCHECK_EQUAL(s, ".._secret");
+
+    // Regression: an embedded NUL byte must be replaced like any other control
+    // character. Previously the "c != 0" guard let it fall through to
+    // sanitized_filename_charset[0 - 32], an out-of-bounds read 32 bytes before
+    // the table. This is reachable over the network: a C-STORE whose
+    // StudyInstanceUID contains an embedded NUL reaches sanitizeFilename intact
+    // (DcmByteString preserves embedded NULs via length-based extraction).
+    OFString withNul;
+    withNul.append("1.2.3", 5);
+    withNul.append(1, '\0');
+    withNul.append("4", 1);
+    OFStandard::sanitizeFilename(withNul);
+    OFCHECK_EQUAL(withNul, OFString("1.2.3_4"));
+
+    // High-range bytes (>= 0x7F) are replaced.
+    OFString withHigh;
+    withHigh.append("AB", 2);
+    withHigh.append(1, '\xff');
+    OFStandard::sanitizeFilename(withHigh);
+    OFCHECK_EQUAL(withHigh, OFString("AB_"));
+
+    // Empty string and length-1 string are handled without crashing.
+    s = "";
+    OFStandard::sanitizeFilename(s);
+    OFCHECK_EQUAL(s, "");
+    s = "/";
+    OFStandard::sanitizeFilename(s);
+    OFCHECK_EQUAL(s, "_");
+}
+
 OFTEST(ofstd_safeSubtractAddMult)
 {
   // --------------- Subtraction ----------------
@@ -421,6 +523,36 @@ OFTEST(ofstd_safeSubtractAddMult)
       OFCHECK_EQUAL(a+1, OFnumeric_limits<unsigned int>::max());
   else
       OFCHECK_EQUAL(a, OFnumeric_limits<unsigned int>::max());
+
+  // --------------- Multiplication of types narrower than "int" ----------------
+  // these are promoted to (signed) "int" before being multiplied, so the product
+  // has to be checked in advance in order to avoid undefined behaviour
+
+  Uint16 c = OFnumeric_limits<Uint16>::max();
+  // check whether overflow occurred (it should): 65535 * 65535 exceeds "int"
+  OFCHECK( OFStandard::safeMult(c, c, c) == OFFalse);
+  // check whether c has not been modified
+  OFCHECK_EQUAL(c, OFnumeric_limits<Uint16>::max());
+
+  c = 256;
+  // check whether overflow occurred (it should): 65536 does not fit into Uint16
+  OFCHECK( OFStandard::safeMult(c, c, c) == OFFalse);
+  OFCHECK_EQUAL(c, 256);
+
+  c = 255;
+  // check whether no overflow occurred (it shouldn't): 255 * 257 = 65535
+  OFCHECK( OFStandard::safeMult(c, OFstatic_cast(Uint16, 257), c) == OFTrue);
+  OFCHECK_EQUAL(c, OFnumeric_limits<Uint16>::max());
+
+  Uint8 d = OFnumeric_limits<Uint8>::max();
+  // check whether overflow occurred (it should): 255 * 255 does not fit into Uint8
+  OFCHECK( OFStandard::safeMult(d, d, d) == OFFalse);
+  OFCHECK_EQUAL(d, OFnumeric_limits<Uint8>::max());
+
+  d = 15;
+  // check whether no overflow occurred (it shouldn't): 15 * 17 = 255
+  OFCHECK( OFStandard::safeMult(d, OFstatic_cast(Uint8, 17), d) == OFTrue);
+  OFCHECK_EQUAL(d, OFnumeric_limits<Uint8>::max());
 }
 
 OFTEST(ofstd_snprintf)

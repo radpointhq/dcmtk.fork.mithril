@@ -1,5 +1,5 @@
 dnl Process this file with autoconf to produce a configure script.
-AC_INIT(dcmtk, 3.6.9, [bugs@dcmtk.org], [dcmtk-3.6.9], [https://www.dcmtk.org/])
+AC_INIT(dcmtk, 3.7.1, [bugs@dcmtk.org], [dcmtk-3.7.1], [https://www.dcmtk.org/])
 AC_PREREQ(2.60)
 AC_CONFIG_SRCDIR(Makefile.in)
 AC_CONFIG_HEADERS(include/dcmtk/config/osconfig.h)
@@ -10,9 +10,9 @@ dnl -------------------------------------------------------
 dnl Additional Package Information
 dnl -------------------------------------------------------
 
-PACKAGE_VERSION_NUMBER=369
-PACKAGE_VERSION_SUFFIX="+"
-PACKAGE_DATE="DEV"
+PACKAGE_VERSION_NUMBER=371
+PACKAGE_VERSION_SUFFIX=""
+PACKAGE_DATE="2026-10-14"
 AC_DEFINE_UNQUOTED(PACKAGE_VERSION_NUMBER,${PACKAGE_VERSION_NUMBER},[Define to the version number of this package.])
 AC_DEFINE_UNQUOTED(PACKAGE_VERSION_SUFFIX,"${PACKAGE_VERSION_SUFFIX}",[Define to the version suffix of this package.])
 AC_DEFINE_UNQUOTED(PACKAGE_DATE,"${PACKAGE_DATE}",[Define to the release date of this package.])
@@ -312,6 +312,61 @@ AC_ARG_ENABLE(debug,
 )
 
 dnl -------------------------------------------------------
+dnl Check for sanitizer support
+dnl -------------------------------------------------------
+
+dnl --enable-sanitizers turns on AddressSanitizer for compile and link of
+dnl every DCMTK target. On Linux LeakSanitizer is also auto-enabled. The
+dnl feature exists to give the unit tests a real memory-error / leak
+dnl regression net; functional OFCHECK asserts alone cannot detect heap-only
+dnl leaks. CFLAGS, CXXFLAGS and LDFLAGS are appended in place; they flow
+dnl into the generated Makefiles via @CFLAGS@, @CXXFLAGS@, @LDFLAGS@.
+AC_MSG_CHECKING(whether to enable AddressSanitizer)
+AC_ARG_ENABLE(sanitizers,
+[  --enable-sanitizers     compile with AddressSanitizer (and LeakSanitizer on Linux)
+  --disable-sanitizers    compile without sanitizers (default)],
+[ case "$enableval" in
+  yes)
+    dnl AddressSanitizer everywhere; LeakSanitizer additionally on Linux
+    dnl (reliably supported there for GCC/Clang; on macOS/*BSD it is missing
+    dnl or runtime-gated, so we do not auto-enable it).
+    SANITIZER_CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g"
+    case "$host_os" in
+      linux*)
+        SANITIZER_CFLAGS="$SANITIZER_CFLAGS -fsanitize=leak"
+        ;;
+    esac
+    dnl Probe the actual compiler rather than matching its name: the driver
+    dnl may be c++, cc++, CC, a ccache wrapper, etc. Require a successful
+    dnl compile AND link, since the sanitizer runtime is pulled in at link
+    dnl time (a single compile-and-link invocation exercises both).
+    echo 'int main(void){return 0;}' > conftest_san.cc
+    if $CXX $SANITIZER_CFLAGS conftest_san.cc -o conftest_san >/dev/null 2>&1; then
+      CFLAGS="$CFLAGS $SANITIZER_CFLAGS"
+      CXXFLAGS="$CXXFLAGS $SANITIZER_CFLAGS"
+      LDFLAGS="$LDFLAGS $SANITIZER_CFLAGS"
+      case "$host_os" in
+        linux*)
+          AC_MSG_RESULT([yes - AddressSanitizer and LeakSanitizer])
+          ;;
+        *)
+          AC_MSG_RESULT([yes - AddressSanitizer only (LeakSanitizer is only auto-enabled on Linux)])
+          ;;
+      esac
+    else
+      AC_MSG_RESULT(no)
+      AC_MSG_WARN([$CXX does not accept $SANITIZER_CFLAGS; continuing without sanitizer flags])
+    fi
+    rm -f conftest_san.cc conftest_san conftest_san.o
+    ;;
+  *)
+    AC_MSG_RESULT(no)
+    ;;
+  esac ],
+  AC_MSG_RESULT(no)
+)
+
+dnl -------------------------------------------------------
 dnl Check for thread support
 dnl -------------------------------------------------------
 
@@ -427,7 +482,6 @@ AC_HEADER_SYS_WAIT
 AC_HEADER_DIRENT
 AC_CHECK_TCP_H
 AC_CHECK_HEADERS(alloca.h)
-AC_CHECK_HEADERS(atomic)
 AC_CHECK_HEADERS(arpa/inet.h)
 AC_CHECK_HEADERS(fnmatch.h)
 AC_CHECK_HEADERS(grp.h)
@@ -876,6 +930,7 @@ AC_CHECK_EXT_LIB_COMPILES(SSL_CTX_set1_sigalgs, OpenSSL, openssl/ssl.h, [SSL_CTX
 AC_CHECK_EXT_LIB_COMPILES(TLS1_TXT_ECDHE_ECDSA_WITH_AES_256_CCM_8, OpenSSL, openssl/ssl.h, [TLS1_TXT_ECDHE_ECDSA_WITH_AES_256_CCM_8])
 AC_CHECK_EXT_LIB_COMPILES(TLS1_TXT_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384, OpenSSL, openssl/ssl.h, [TLS1_TXT_ECDHE_ECDSA_WITH_CAMELLIA_256_GCM_SHA384])
 AC_CHECK_EXT_LIB_COMPILES(TS_VERIFY_CTX_SET0_STORE, OpenSSL, openssl/ts.h, [TS_VERIFY_CTX_set0_store(0,0)])
+AC_CHECK_EXT_LIB_COMPILES(X509_CHECK_CERTIFICATE_TIMES, OpenSSL, openssl/x509.h, [X509_check_certificate_times(0,0,0)])
 
 dnl test presence of functions, constants and macros needed for the dcmsign module
 AC_CHECK_EXT_LIB_PROTOTYPE(EVP_PKEY_get_group_name, OpenSSL, openssl/evp.h)
@@ -1358,46 +1413,20 @@ AC_ARG_ENABLE(builtin-oficonv,
 
 
 dnl -------------------------------------------------------
-dnl Enable/Disable C++11 support
+dnl C++11 support
 dnl -------------------------------------------------------
 
-ac_enable_cxx11="yes"
-AC_MSG_CHECKING(whether to enable C++11 support)
-AC_ARG_ENABLE(cxx11,
-[  --enable-cxx11          use C++11 (default)
-  --disable-cxx11         do not use C++11],
-[ case "$enableval" in
-  yes)
-   ac_enable_cxx11="yes"
-   ;;
-
-  *)
-   ac_enable_cxx11="no"
-   ;;
-  esac ]
-)
-
-if test "$ac_enable_cxx11" = "yes"; then
-   AC_MSG_RESULT()
-   AX_CXX_COMPILE_STDCXX([11], [noext], [mandatory])
-   if test "$HAVE_CXX11" != 1; then
-     ac_enable_cxx11="no"
-   fi
-   AC_MSG_CHECKING(whether to enable C++11 support)
-fi
-
-AC_MSG_RESULT($ac_enable_cxx11)
-
+AX_CXX_COMPILE_STDCXX([11], [noext], [mandatory])
 
 dnl -------------------------------------------------------
 dnl Enable/Disable STL support
 dnl -------------------------------------------------------
 
-ac_enable_stl="no"
+ac_enable_stl="yes"
 AC_MSG_CHECKING(whether to enable STL support)
 AC_ARG_ENABLE(stl,
-[  --enable-stl            use C++ STL
-  --disable-stl           do not use C++ STL (default)],
+[  --enable-stl            use C++ STL (default)
+  --disable-stl           do not use C++ STL],
 [ case "$enableval" in
   yes)
    ac_enable_stl="yes"
@@ -1429,7 +1458,7 @@ if test "$ac_enable_stl_vector" = "auto"; then
   ac_enable_stl_vector="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_vector" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/vector.cc"]])], [AC_DEFINE(HAVE_STL_VECTOR, 1, [Define if STL's vector should be used.])], [ac_enable_stl_vector="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_VECTOR, 1, [Define if STL's vector should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_vector)
 
@@ -1452,7 +1481,7 @@ if test "$ac_enable_stl_algorithm" = "auto"; then
   ac_enable_stl_algorithm="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_algorithm" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/algo.cc"]])], [AC_DEFINE(HAVE_STL_ALGORITHM, 1, [Define if STL's algorithm should be used.])], [ac_enable_stl_algorithm="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_ALGORITHM, 1, [Define if STL's algorithm should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_algorithm)
 
@@ -1475,7 +1504,7 @@ if test "$ac_enable_stl_list" = "auto"; then
   ac_enable_stl_list="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_list" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/list.cc"]])], [AC_DEFINE(HAVE_STL_LIST, 1, [Define if STL's list should be used.])], [ac_enable_stl_list="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_LIST, 1, [Define if STL's list should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_list)
 
@@ -1498,7 +1527,7 @@ if test "$ac_enable_stl_map" = "auto"; then
   ac_enable_stl_map="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_map" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/map.cc"]])], [AC_DEFINE(HAVE_STL_MAP, 1, [Define if STL's map should be used.])], [ac_enable_stl_map="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_MAP, 1, [Define if STL's map should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_map)
 
@@ -1521,7 +1550,7 @@ if test "$ac_enable_stl_memory" = "auto"; then
   ac_enable_stl_memory="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_memory" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/memory.cc"]])], [AC_DEFINE(HAVE_STL_MEMORY, 1, [Define if STL's memory should be used.])], [ac_enable_stl_memory="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_MEMORY, 1, [Define if STL's memory should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_memory)
 
@@ -1544,7 +1573,7 @@ if test "$ac_enable_stl_stack" = "auto"; then
   ac_enable_stl_stack="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_stack" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/stack.cc"]])], [AC_DEFINE(HAVE_STL_STACK, 1, [Define if STL's stack should be used.])], []ac_enable_stl_stack="unsupported -> no")
+  AC_DEFINE(HAVE_STL_STACK, 1, [Define if STL's stack should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_stack)
 
@@ -1567,7 +1596,7 @@ if test "$ac_enable_stl_string" = "auto"; then
   ac_enable_stl_string="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_string" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/string.cc"]])], [AC_DEFINE(HAVE_STL_STRING, 1, [Define if STL's string should be used.])], [ac_enable_stl_string="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_STRING, 1, [Define if STL's string should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_string)
 
@@ -1592,7 +1621,7 @@ if test "$ac_enable_stl_type_traits" = "auto"; then
   ac_enable_stl_type_traits="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_type_traits" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/ttraits.cc"]])], [AC_DEFINE(HAVE_STL_TYPE_TRAITS, 1, [Define if STL's type traits should be used.])], [ac_enable_stl_type_traits="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_TYPE_TRAITS, 1, [Define if STL's type traits should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_type_traits)
 
@@ -1615,7 +1644,7 @@ if test "$ac_enable_stl_tuple" = "auto"; then
   ac_enable_stl_tuple="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_tuple" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/tuple.cc"]])], [AC_DEFINE(HAVE_STL_TUPLE, 1, [Define if STL's tuple should be used.])], [ac_enable_stl_tuple="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_TUPLE, 1, [Define if STL's tuple should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_tuple)
 
@@ -1640,7 +1669,7 @@ if test "$ac_enable_stl_system_error" = "auto"; then
   ac_enable_stl_system_error="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_system_error" = "yes"; then
-  AC_RUN_IFELSE([AC_LANG_SOURCE([[#include "tests/syserr.cc"]])], [AC_DEFINE(HAVE_STL_SYSTEM_ERROR, 1, [Define if STL's system_error should be used.])], [ac_enable_stl_system_error="unsupported -> no"])
+  AC_DEFINE(HAVE_STL_SYSTEM_ERROR, 1, [Define if STL's system_error should be used.])
 fi
 AC_MSG_RESULT($ac_enable_stl_system_error)
 
@@ -1665,11 +1694,7 @@ if test "$ac_enable_stl_atomic" = "auto"; then
   ac_enable_stl_atomic="$ac_enable_stl"
 fi
 if test "$ac_enable_stl_atomic" = "yes"; then
-  if test $ac_cv_header_atomic = yes ; then
     AC_DEFINE(HAVE_STL_ATOMIC, 1, [Define if STL's atomic should be used.])
-  else
-    ac_enable_stl_atomic="unsupported -> no"
-  fi
 fi
 AC_MSG_RESULT($ac_enable_stl_atomic)
 

@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -165,7 +165,8 @@ class DCMTK_DCMDATA_EXPORT DcmFileFormat
 
     /** read object from a stream.
      *  @param inStream DICOM input stream
-     *  @param xfer transfer syntax to use when parsing
+     *  @param xfer transfer syntax to use when parsing (if not specified in the
+     *    meta header)
      *  @param glenc handling of group length parameters
      *  @param maxReadLength attribute values larger than this value are skipped
      *    while parsing and read later upon first access if the stream type supports
@@ -179,7 +180,8 @@ class DCMTK_DCMDATA_EXPORT DcmFileFormat
 
     /** read object from a stream, up to the attribute tag stopParsingAtElement.
      *  @param inStream DICOM input stream
-     *  @param xfer transfer syntax to use when parsing
+     *  @param xfer transfer syntax to use when parsing (if not specified in the
+     *    meta header)
      *  @param glenc handling of group length parameters
      *  @param maxReadLength attribute values larger than this value are skipped
      *    while parsing and read later upon first access if the stream type supports
@@ -260,7 +262,9 @@ class DCMTK_DCMDATA_EXPORT DcmFileFormat
      *  @param fileName name of the file to load (may contain wide chars if support enabled).
      *    Since there are various constructors for the OFFilename class, a "char *", "OFString"
      *    or "wchar_t *" can also be passed directly to this parameter.
-     *  @param readXfer transfer syntax used to read the data (auto detection if EXS_Unknown)
+     *  @param readXfer transfer syntax used to read the data (auto detection if EXS_Unknown).
+     *    Please note that the given transfer syntax is not used for DICOM files, as the meta
+     *    header already specifies the transfer syntax of the dataset (unless it is ignored).
      *  @param groupLength flag, specifying how to handle the group length tags
      *  @param maxReadLength maximum number of bytes to be read for an element value.
      *    Element values with a larger size are not loaded until their value is retrieved
@@ -282,7 +286,9 @@ class DCMTK_DCMDATA_EXPORT DcmFileFormat
      *  @param fileName name of the file to load (may contain wide chars if support enabled).
      *    Since there are various constructors for the OFFilename class, a "char *", "OFString"
      *    or "wchar_t *" can also be passed directly to this parameter.
-     *  @param readXfer transfer syntax used to read the data (auto detection if EXS_Unknown)
+     *  @param readXfer transfer syntax used to read the data (auto detection if EXS_Unknown).
+     *    Please note that the given transfer syntax is not used for DICOM files, as the meta
+     *    header already specifies the transfer syntax of the dataset (unless it is ignored).
      *  @param groupLength flag, specifying how to handle the group length tags
      *  @param maxReadLength maximum number of bytes to be read for an element value.
      *    Element values with a larger size are not loaded until their value is retrieved
@@ -514,6 +520,35 @@ class DCMTK_DCMDATA_EXPORT DcmFileFormat
 
     /// implementation version name to write in the meta-header
     OFString ImplementationVersionName;
+
+    /// maximum sequence nesting depth for parsing
+    /// (0 = compile-time default DCMTK_MAX_SEQUENCE_NESTING, -1 = unlimited)
+    Sint32 MaxNestingDepth;
+
+  public:
+
+    /** set the maximum permitted sequence nesting depth for parsing.
+     *  Applied to the input stream in loadFile() and read(), and also
+     *  forwarded to the contained dataset.
+     *  - Value 0 (default): apply the compile-time default
+     *    (DCMTK_MAX_SEQUENCE_NESTING, default is 64)
+     *  - Value -1: disable the check (allow unlimited nesting)
+     *  - Value > 0: use this value as the maximum permitted nesting depth
+     *  @param maxDepth maximum nesting depth setting
+     */
+    void setMaxNestingDepth(Sint32 maxDepth)
+    {
+        MaxNestingDepth = maxDepth;
+        DcmDataset* dset = getDataset();
+        if (dset)
+            dset->setMaxNestingDepth(maxDepth);
+    }
+
+    /** return the maximum permitted sequence nesting depth for parsing.
+     *  @return maximum nesting depth setting
+     *    (0 = compile-time default DCMTK_MAX_SEQUENCE_NESTING, -1 = unlimited)
+     */
+    Sint32 getMaxNestingDepth() const { return MaxNestingDepth; }
 };
 
 

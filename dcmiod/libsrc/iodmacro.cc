@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -30,6 +30,29 @@
 #include "dcmtk/dcmdata/dcvruc.h"
 #include "dcmtk/dcmdata/dcuid.h"
 #include "dcmtk/ofstd/ofstd.h"
+
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+    OFshared_ptr<IODRules> s_codeSeqRules;
+    OFMutex s_codeSeqMutex;
+    OFshared_ptr<IODRules> s_sopInstRefRules;
+    OFMutex s_sopInstRefMutex;
+    OFshared_ptr<IODRules> s_seriesAndInstRefRules;
+    OFMutex s_seriesAndInstRefMutex;
+    OFshared_ptr<IODRules> s_referencedSeriesItemRules;
+    OFMutex s_referencedSeriesItemMutex;
+    OFshared_ptr<IODRules> s_hl7HierarchicDesignatorRules;
+    OFMutex s_hl7HierarchicDesignatorMutex;
+    OFshared_ptr<IODRules> s_mandatoryViewRules;
+    OFMutex s_mandatoryViewMutex;
+}
 
 // --------------------------- Code Sequence Macro ---------------------------
 
@@ -110,18 +133,32 @@ OFString CodeSequenceMacro::getName() const
 
 void CodeSequenceMacro::resetRules()
 {
-    m_Rules->addRule(new IODRule(DCM_CodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue /*overwrite old rule*/);
-    m_Rules->addRule(new IODRule(DCM_URNCodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue /*overwrite old rule*/);
-    m_Rules->addRule(new IODRule(DCM_LongCodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue /*overwrite old rule*/);
-    m_Rules->addRule(new IODRule(DCM_CodingSchemeDesignator, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue /*overwrite old rule*/);
-    m_Rules->addRule(new IODRule(DCM_CodingSchemeVersion, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue /*overwrite old rule*/);
-    m_Rules->addRule(new IODRule(DCM_CodeMeaning, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue /*overwrite old rule*/);
+    s_codeSeqMutex.lock();
+    if (!s_codeSeqRules)
+    {
+        s_codeSeqRules.reset(new IODRules());
+        s_codeSeqRules->addRule(new IODRule(DCM_CodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_codeSeqRules->addRule(new IODRule(DCM_URNCodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_codeSeqRules->addRule(new IODRule(DCM_LongCodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_codeSeqRules->addRule(new IODRule(DCM_CodingSchemeDesignator, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_codeSeqRules->addRule(new IODRule(DCM_CodingSchemeVersion, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_codeSeqRules->addRule(new IODRule(DCM_CodeMeaning, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    }
+    s_codeSeqMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_codeSeqRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_codeSeqRules->begin();
+        while (it != s_codeSeqRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 // -- get dicom attributes --
@@ -437,9 +474,21 @@ OFCondition CodeWithModifiers::read(DcmItem& source, const OFBool clearOldData)
 
 void CodeWithModifiers::resetRules()
 {
-    CodeSequenceMacro::resetRules();
-    m_Rules->addRule(
-        new IODRule(m_CodeModifierSeq, m_ModifierVM, m_ModifierType, getName(), DcmIODTypes::IE_UNDEFINED));
+    // Cannot use per-class static defaults: this class adds a rule whose tag
+    // (m_CodeModifierSeq), VM (m_ModifierVM), and type (m_ModifierType) are
+    // supplied as constructor arguments and differ between instances.
+    // Create a fresh, privately owned rules container each time.
+    m_Rules.reset(new IODRules());
+    m_HasOwnRules = OFTrue;
+    // Replicate CodeSequenceMacro rules under our own getName()
+    m_Rules->addRule(new IODRule(DCM_CodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    m_Rules->addRule(new IODRule(DCM_URNCodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    m_Rules->addRule(new IODRule(DCM_LongCodeValue, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    m_Rules->addRule(new IODRule(DCM_CodingSchemeDesignator, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    m_Rules->addRule(new IODRule(DCM_CodingSchemeVersion, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    m_Rules->addRule(new IODRule(DCM_CodeMeaning, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    // Add instance-specific modifier sequence rule
+    m_Rules->addRule(new IODRule(m_CodeModifierSeq, m_ModifierVM, m_ModifierType, getName(), DcmIODTypes::IE_UNDEFINED));
 }
 
 OFCondition CodeWithModifiers::write(DcmItem& destination)
@@ -530,8 +579,28 @@ void IODSeriesAndInstanceReferenceMacro::clearData()
 
 void IODSeriesAndInstanceReferenceMacro::resetRules()
 {
-    m_Rules->addRule(new IODRule(DCM_ReferencedSeriesSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
+    s_seriesAndInstRefMutex.lock();
+    if (!s_seriesAndInstRefRules)
+    {
+        s_seriesAndInstRefRules.reset(new IODRules());
+        s_seriesAndInstRefRules->addRule(
+            new IODRule(DCM_ReferencedSeriesSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_seriesAndInstRefMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_seriesAndInstRefRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_seriesAndInstRefRules->begin();
+        while (it != s_seriesAndInstRefRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFVector<IODSeriesAndInstanceReferenceMacro::ReferencedSeriesItem*>&
@@ -609,10 +678,30 @@ OFCondition IODSeriesAndInstanceReferenceMacro::ReferencedSeriesItem::write(DcmI
 
 void IODSeriesAndInstanceReferenceMacro::ReferencedSeriesItem::resetRules()
 {
-    // Parameters for Rule are tag, VM, type (1,1C,2,2C,3), module name and logical IOD level
-    m_Rules->addRule(new IODRule(DCM_SeriesInstanceUID, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ReferencedInstanceSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE),
-                     OFTrue);
+    s_referencedSeriesItemMutex.lock();
+    if (!s_referencedSeriesItemRules)
+    {
+        s_referencedSeriesItemRules.reset(new IODRules());
+        s_referencedSeriesItemRules->addRule(
+            new IODRule(DCM_SeriesInstanceUID, "1", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+        s_referencedSeriesItemRules->addRule(
+            new IODRule(DCM_ReferencedInstanceSequence, "1-n", "1", getName(), DcmIODTypes::IE_INSTANCE), OFTrue);
+    }
+    s_referencedSeriesItemMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_referencedSeriesItemRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_referencedSeriesItemRules->begin();
+        while (it != s_referencedSeriesItemRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFVector<SOPInstanceReferenceMacro*>&
@@ -707,9 +796,30 @@ OFString SOPInstanceReferenceMacro::getName() const
 
 void SOPInstanceReferenceMacro::resetRules()
 {
-    // Parameters for Rule are tag, VM, type (1,1C,2,2C,3), module name and logical IOD level
-    m_Rules->addRule(new IODRule(DCM_ReferencedSOPClassUID, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ReferencedSOPInstanceUID, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    s_sopInstRefMutex.lock();
+    if (!s_sopInstRefRules)
+    {
+        s_sopInstRefRules.reset(new IODRules());
+        s_sopInstRefRules->addRule(
+            new IODRule(DCM_ReferencedSOPClassUID, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_sopInstRefRules->addRule(
+            new IODRule(DCM_ReferencedSOPInstanceUID, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    }
+    s_sopInstRefMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_sopInstRefRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_sopInstRefRules->begin();
+        while (it != s_sopInstRefRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 // -- get dicom attributes --
@@ -889,7 +999,25 @@ OFCondition ImageSOPInstanceReferenceMacro::getReferencedSegmentNumber(OFVector<
 OFCondition ImageSOPInstanceReferenceMacro::setReferencedFrameNumber(const OFVector<Uint16>& values,
                                                                      const OFBool checkValue)
 {
-    return DcmIODUtil::setUint16ValuesOnElement(ReferencedFrameNumber, values, "1-n", checkValue);
+    // Referenced Frame Number has VR IS, so the values must be converted into a
+    // backslash-separated string
+    OFString str;
+    char buf[10];
+    OFVector<Uint16>::const_iterator it = values.begin();
+    while (it != values.end())
+    {
+        if (!str.empty())
+        {
+            str += "\\";
+        }
+        OFStandard::snprintf(buf, sizeof(buf), "%u", *it);
+        str += buf;
+        it++;
+    }
+    OFCondition result = (checkValue) ? DcmIntegerString::checkStringValue(str, "1-n") : EC_Normal;
+    if (result.good())
+        result = ReferencedFrameNumber.putOFStringArray(str);
+    return result;
 }
 
 OFCondition ImageSOPInstanceReferenceMacro::addReferencedFrameNumber(const Uint16& value, const OFBool checkValue)
@@ -1684,11 +1812,32 @@ OFString HL7HierarchicDesignatorMacro::getName() const
 
 void HL7HierarchicDesignatorMacro::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_UniversalEntityID, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_LocalNamespaceEntityID, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_UniversalEntityIDType, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    s_hl7HierarchicDesignatorMutex.lock();
+    if (!s_hl7HierarchicDesignatorRules)
+    {
+        s_hl7HierarchicDesignatorRules.reset(new IODRules());
+        s_hl7HierarchicDesignatorRules->addRule(
+            new IODRule(DCM_UniversalEntityID, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_hl7HierarchicDesignatorRules->addRule(
+            new IODRule(DCM_LocalNamespaceEntityID, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_hl7HierarchicDesignatorRules->addRule(
+            new IODRule(DCM_UniversalEntityIDType, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    }
+    s_hl7HierarchicDesignatorMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_hl7HierarchicDesignatorRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_hl7HierarchicDesignatorRules->begin();
+        while (it != s_hl7HierarchicDesignatorRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFCondition HL7HierarchicDesignatorMacro::setLocalNamespaceEntityID(const OFString& value, const OFBool checkValue)
@@ -1730,6 +1879,11 @@ MandatoryViewAndSliceProgressionDirectionMacro::MandatoryViewAndSliceProgression
     resetRules();
 }
 
+MandatoryViewAndSliceProgressionDirectionMacro::~MandatoryViewAndSliceProgressionDirectionMacro()
+{
+    DcmIODUtil::freeContainer(m_ViewModifierCode);
+}
+
 OFString MandatoryViewAndSliceProgressionDirectionMacro::getName() const
 {
     return "MandatoryViewAndSliceProgressionDirectionMacro";
@@ -1737,11 +1891,32 @@ OFString MandatoryViewAndSliceProgressionDirectionMacro::getName() const
 
 void MandatoryViewAndSliceProgressionDirectionMacro::resetRules()
 {
-    m_Rules->addRule(new IODRule(DCM_ViewCodeSequence, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_ViewModifierCodeSequence, "1-n", "2C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue);
-    m_Rules->addRule(new IODRule(DCM_SliceProgressionDirection, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED),
-                     OFTrue);
+    s_mandatoryViewMutex.lock();
+    if (!s_mandatoryViewRules)
+    {
+        s_mandatoryViewRules.reset(new IODRules());
+        s_mandatoryViewRules->addRule(
+            new IODRule(DCM_ViewCodeSequence, "1", "1", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_mandatoryViewRules->addRule(
+            new IODRule(DCM_ViewModifierCodeSequence, "1-n", "2C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+        s_mandatoryViewRules->addRule(
+            new IODRule(DCM_SliceProgressionDirection, "1", "1C", getName(), DcmIODTypes::IE_UNDEFINED), OFTrue);
+    }
+    s_mandatoryViewMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_mandatoryViewRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_mandatoryViewRules->begin();
+        while (it != s_mandatoryViewRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 void MandatoryViewAndSliceProgressionDirectionMacro::clearData()
@@ -1754,16 +1929,20 @@ void MandatoryViewAndSliceProgressionDirectionMacro::clearData()
 OFCondition MandatoryViewAndSliceProgressionDirectionMacro::read(DcmItem& source, const OFBool clearOldData)
 {
     if (clearOldData)
-    {
-        m_ViewCodeSequence.clearData();
-        DcmIODUtil::freeContainer(m_ViewModifierCode);
-    }
-    OFCondition result = EC_Normal;
+        clearData();
+
+    IODComponent::read(source, OFFalse /* data already cleared above */);
+
     DcmIODUtil::readSingleItem(
         source, DCM_ViewCodeSequence, m_ViewCodeSequence, m_Rules->getByTag(DCM_ViewCodeSequence));
-    DcmIODUtil::readSubSequence(
-        source, DCM_ViewCodeSequence, m_ViewModifierCode, m_Rules->getByTag(DCM_ViewCodeSequence));
-    IODComponent::read(source, clearOldData);
+
+    /* View Modifier Code Sequence is nested within the single item of the View Code Sequence */
+    DcmItem* viewCodeItem = NULL;
+    if (source.findAndGetSequenceItem(DCM_ViewCodeSequence, viewCodeItem).good())
+    {
+        DcmIODUtil::readSubSequence(
+            *viewCodeItem, DCM_ViewModifierCodeSequence, m_ViewModifierCode, m_Rules->getByTag(DCM_ViewModifierCodeSequence));
+    }
     return EC_Normal;
 }
 
@@ -1772,8 +1951,17 @@ OFCondition MandatoryViewAndSliceProgressionDirectionMacro::write(DcmItem& item)
     OFCondition result = EC_Normal;
     DcmIODUtil::writeSingleItem(
         result, DCM_ViewCodeSequence, m_ViewCodeSequence, *m_Item, m_Rules->getByTag(DCM_ViewCodeSequence));
-    DcmIODUtil::writeSubSequence(
-        result, DCM_ViewCodeSequence, m_ViewModifierCode, *m_Item, m_Rules->getByTag(DCM_ViewModifierCodeSequence));
+    if (result.good())
+    {
+        /* View Modifier Code Sequence is nested within the single item of the View Code Sequence */
+        DcmItem* viewCodeItem = NULL;
+        result = m_Item->findAndGetSequenceItem(DCM_ViewCodeSequence, viewCodeItem);
+        if (result.good())
+        {
+            DcmIODUtil::writeSubSequence(
+                result, DCM_ViewModifierCodeSequence, m_ViewModifierCode, *viewCodeItem, m_Rules->getByTag(DCM_ViewModifierCodeSequence));
+        }
+    }
     if (result.good())
         result = IODComponent::write(item);
     return result;

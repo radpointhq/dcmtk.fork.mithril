@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2025, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -392,14 +392,15 @@ class DCMTK_DCMSR_EXPORT DSRDocument
      *  The DICOM standard states: "The intent of the Current Requested Procedure Evidence Sequence
      *  is to reference all evidence created in order to satisfy the current Requested Procedure(s)
      *  for this SR Document.  This shall include, but is not limited to, all current evidence
-     *  referenced in the content tree." and "For a completed SR Document satisfying (i.e., being
-     *  the final report for) the current Requested Procedure(s), this sequence shall list the full
+     *  referenced in the Content Tree." and "For a completed SR Document satisfying (i.e., being
+     *  the final report for) the current Requested Procedure(s), this Sequence shall list the full
      *  set of Composite SOP Instances created for the current Requested Procedure(s).  For other
-     *  SOP Instances that include the SR Document General Module, this sequence shall contain at
+     *  SOP Instances that include the SR Document General Module, this Sequence shall contain at
      *  minimum the set of Composite SOP Instances from the current Requested Procedure(s) that are
-     *  referenced in the content tree." and "In the context of the Key Object Selection, the
-     *  current evidence is considered to be only the set of instances referenced within the Key
-     *  Object Selection."
+     *  referenced in the Content Tree."
+     *  For document types that use the Key Object Document Module: "List of all Composite SOP
+     *  Instances referenced in the Content Sequence.  No other instances shall be included in this
+     *  Sequence."
      ** @return reference to list object
      */
     virtual DSRSOPInstanceReferenceList &getCurrentRequestedProcedureEvidence();
@@ -420,7 +421,7 @@ class DCMTK_DCMSR_EXPORT DSRDocument
      *  Identical Documents Sequence.
      *  The DICOM standard states: "Such referenced Instances may include equivalent documents or
      *  renderings of this document. [...] Required if the identity of a CDA Document equivalent
-     *  to the current SOP Instance is known at the time of creation of this SOP instance. May be
+     *  to the current SOP Instance is known at the time of creation of this SOP Instance.  May be
      *  present otherwise."  The Purpose of Reference Code should be taken from Defined Context
      *  Group 7006 (SR Document Purposes of Reference).
      *  Note: An equivalent rendering of the document might be provided as an "Encapsulated PDF"

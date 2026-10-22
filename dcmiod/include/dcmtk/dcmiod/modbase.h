@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2025, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -42,6 +42,58 @@
  *  This class is meant to support nested substructures but so far only writes
  *  attributes on a single level (including sequences). Also, in this context
  *  the class carries a parent relationship which is not used at the moment.
+ *
+ *  <b>Static per-class default rules (performance optimization)</b>
+ *
+ *  Creating many instances of an IODComponent subclass (e.g.\ CodeSequenceMacro
+ *  inside per-frame functional groups of an Enhanced CT with 100,000 frames)
+ *  used to allocate a fresh IODRules container and N individual IODRule objects
+ *  per instance. Since the rules are usually identical for every instance of the
+ *  same concrete class, this overhead is avoidable.
+ *
+ *  The optimization works as follows:
+ *  - Each concrete subclass maintains a <em>static</em> OFshared_ptr<IODRules>
+ *    (typically in an anonymous namespace in its .cc file), lazily initialized
+ *    on the first instantiation of that class using a per-class OFMutex.
+ *  - When resetRules() is called and no external rules container was provided
+ *    (m_ExternalRules == OFFalse), the instance simply points its m_Rules
+ *    shared_ptr at the class-level static. No heap allocation takes place after
+ *    the very first instance of that class is created.
+ *  - m_HasOwnRules is OFFalse in this state, meaning the rules are considered
+ *    immutable for this instance. Any operation that needs to mutate the rule
+ *    set (makeOptional(), getRules() for modification) calls ensureOwnRules()
+ *    first, which performs a copy-on-write: the shared static is cloned into a
+ *    new private IODRules, and m_HasOwnRules is set to OFTrue.
+ *  - Calling resetRules() after makeOptional() re-points m_Rules at the
+ *    static and drops the private copy (resetting to class defaults), which is
+ *    the documented contract of resetRules().
+ *  - When rules are provided externally via the IODComponent(item, rules,
+ *    parent) constructor (m_ExternalRules == OFTrue, the pattern used by
+ *    DcmIODCommon to build a single shared IODRules for all modules of an IOD),
+ *    resetRules() falls back to the original behaviour and populates the shared
+ *    container in place. Static defaults are still initialised on that first
+ *    call so they are available for subsequent standalone instantiations.
+ *
+ *  How to implement resetRules() in a new subclass
+ *  ------------------------------------------------
+ *  The typical (optimized) pattern:
+ *    1. Declare a static OFshared_ptr<IODRules> and a static OFMutex in an
+ *       anonymous namespace in the .cc file.
+ *    2. Lock the mutex, and if the static pointer is still null, allocate a
+ *       new IODRules and add all rules to it, then unlock.
+ *    3. If m_ExternalRules is OFFalse, point m_Rules at the static and set
+ *       m_HasOwnRules = OFFalse (sharing path).
+ *       If m_ExternalRules is OFTrue, iterate the static and clone each rule
+ *       into m_Rules (in-place population path used by DcmIODCommon).
+ *  See any existing resetRules() implementation for a concrete example.
+ *
+ *  Exception - rules that depend on constructor arguments:
+ *  If the rule set varies between instances of the same class (e.g. because
+ *  a constructor argument determines which rules are added, as in
+ *  CodeWithModifiers), a shared static cannot be used.  In that case allocate
+ *  a fresh IODRules directly into m_Rules, set m_HasOwnRules = OFTrue, and
+ *  populate it normally.  The rest of the copy-on-write machinery is
+ *  unaffected; the instance simply starts life already owning its rules.
  */
 class DCMTK_DCMIOD_EXPORT IODComponent
 {
@@ -98,13 +150,14 @@ public:
      */
     virtual void resetRules() = 0;
 
-    /** Get rules handled by this module
-     *  @return The rules
+    /** Get rules handled by this module.
+     *  Triggers copy-on-write if this instance currently shares the class-level
+     *  static default rules, since the caller may intend to modify them.
+     *  For read-only inspection of rules, iterate m_Rules directly from a
+     *  subclass or use the const read/write helpers.
+     *  @return The rules (private copy if copy-on-write was triggered)
      */
-    OFshared_ptr<IODRules> getRules()
-    {
-        return m_Rules;
-    }
+    OFshared_ptr<IODRules> getRules();
 
     /** Make component optional by turning all attributes requirement types of it
      *  to type 3. In order to reset to the attribute's original types,
@@ -202,15 +255,39 @@ public:
     virtual void setValueCheckOnWrite(const OFBool checkValue);
 
 protected:
+    /** Ensure this instance has its own private, writable copy of m_Rules.
+     *  If m_HasOwnRules is already OFTrue, this is a no-op. Otherwise (the
+     *  instance is sharing the class-level static default rules) the shared
+     *  IODRules object is cloned into a new heap-allocated copy owned solely
+     *  by this instance, and m_HasOwnRules is set to OFTrue.
+     *  Must be called before any in-place mutation of m_Rules (e.g. changing
+     *  requirement types, adding ad-hoc rules).
+     */
+    void ensureOwnRules();
+
     /// Shared pointer to the data handled by this class. The item may contain
     /// more attributes than this class is actually responsible for
     OFshared_ptr<DcmItem> m_Item;
 
-    /// Rules describing the attributes governed by this class
+    /// Rules describing the attributes governed by this class.
+    /// Normally points to the class-level static default rules shared by all
+    /// instances (m_HasOwnRules == OFFalse). After ensureOwnRules() is called
+    /// it points to a private copy (m_HasOwnRules == OFTrue).
     OFshared_ptr<IODRules> m_Rules;
 
     /// The parent component (may be NULL) of this class
     IODComponent* m_Parent;
+
+    /// OFTrue if m_Rules is a private copy owned solely by this instance and
+    /// safe to mutate in place. OFFalse if m_Rules is the shared class-level
+    /// static and must not be modified without triggering copy-on-write first.
+    OFBool m_HasOwnRules;
+
+    /// OFTrue if the rules container was supplied externally via the
+    /// IODComponent(item, rules, parent) constructor (shared-container pattern
+    /// used e.g. by DcmIODCommon). When OFTrue, resetRules() populates the
+    /// shared container in place instead of pointing at the per-class static.
+    OFBool m_ExternalRules;
 
     /// Denotes whether attribute values should be checked on writing, i.e. if writing
     /// should fail if attribute values violate their VR, VM, character set or value length.

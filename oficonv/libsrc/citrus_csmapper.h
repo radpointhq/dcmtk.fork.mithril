@@ -39,6 +39,9 @@ int  _citrus_csmapper_open(struct _citrus_csmapper * *,
         unsigned long *);
 
 void _citrus_csmapper_free();
+void _citrus_cleanup_csmapper_none();
+int  _citrus_mapper_area_exists();
+
 END_EXTERN_C
 
 #endif

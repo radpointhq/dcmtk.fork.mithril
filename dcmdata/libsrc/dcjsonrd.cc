@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2024-2025, OFFIS e.V.
+ *  Copyright (C) 2024-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -35,6 +35,11 @@
 #ifdef HAVE_WINDOWS_H
 #include <windows.h>
 #endif
+
+BEGIN_EXTERN_C
+#include <sys/stat.h>
+#include <fcntl.h>
+END_EXTERN_C
 
 // Private creator identification string for files
 // containing a list of datasets as a private sequence
@@ -197,7 +202,7 @@ OFCondition DcmJSONReader::reserveTokens()
     }
 
     // initialize token array with zeroes
-    memset(tokenArray_, 0, tokenNum * sizeof(OFJsmnToken));
+    memset(tokenArray_, 0, (tokenNum+1) * sizeof(OFJsmnToken));
 
     // fill dummy token at the end of the array with values
     // that allow the loop in parseElement() to reliably terminate
@@ -216,6 +221,14 @@ OFCondition DcmJSONReader::reserveTokens()
 void DcmJSONReader::getTokenContent(OFString& value, OFJsmnTokenPtr t)
 {
     int size = t->end - t->start;
+
+    // prevent out-of bounds access
+    if (t->start < 0 || t->end < 0 || t->start + size < 0 ||
+        OFstatic_cast(size_t, (t->start + size)) >= jsonDatasetLen_)
+    {
+        value = "";
+        return;
+    }
 
     // remember the character immediately following the token
     char c = jsonDataset_[t->start+size];
@@ -562,8 +575,15 @@ OFCondition DcmJSONReader::processJSONEscapeCharacters(OFString& value)
 OFCondition DcmJSONReader::parseElement(
     DcmItem* dataset,
     DcmItem* metaheader,
+    size_t depth,
     OFJsmnTokenPtr& current)
 {
+    if (depth > DCMJSON_MAX_SEQUENCE_NESTING)
+    {
+        DCMDATA_ERROR("DcmJSONReader: maximum sequence nesting level " << DCMJSON_MAX_SEQUENCE_NESTING << " exceeded");
+        return EC_NestingDepthLimitExceeded;
+    }
+
     OFCondition result = EC_Normal;
     DCMDATA_TRACE("element at " << current->start);
 
@@ -611,7 +631,7 @@ OFCondition DcmJSONReader::parseElement(
             if (vrToken == NULL)
                 vrToken = current;
             else
-                DCMDATA_WARN("attribute '" << attrName << " already present in this JSON object. This token will be ignored");
+                DCMDATA_WARN("DcmJSONReader: attribute '" << attrName << " already present in this JSON object, token will be ignored");
         }
         else
         {
@@ -623,7 +643,7 @@ OFCondition DcmJSONReader::parseElement(
                     valueType = attrName;
                 }
                 else
-                    DCMDATA_WARN("attribute '" << attrName << " already present in this JSON object. This token will be ignored");
+                    DCMDATA_WARN("DcmJSONReader: attribute '" << attrName << " already present in this JSON object, token will be ignored");
             }
             else
             {
@@ -631,7 +651,7 @@ OFCondition DcmJSONReader::parseElement(
                 return EC_InvalidJSONContent;
             }
         }
-        // find the next token in the current hierarchie
+        // find the next token in the current hierarchy
         OFJsmnTokenPtr tmpToken = current;
         while (current->start < tmpToken->end)
             current++;
@@ -660,15 +680,15 @@ OFCondition DcmJSONReader::parseElement(
     {
         if (ignoreBulkdataURIPolicy_)
         {
-            // leave the element with BulkdataURI empty
-            DCMDATA_INFO("ignoring BulkdataURI for element: " << dcmTag << ", leaving element empty");
+            // leave the element with BulkDataURI empty
+            DCMDATA_INFO("ignoring BulkDataURI for element: " << dcmTag << ", leaving element empty");
         }
         else
         {
             // the URI value has to be a JSON string
             if (valueToken->type != JSMN_STRING)
             {
-                DCMDATA_ERROR("not a valid DICOM JSON dataset: BulkdataURI value must be a JSON string");
+                DCMDATA_ERROR("not a valid DICOM JSON dataset: BulkDataURI value must be a JSON string");
                 delete newElem;
                 return EC_InvalidJSONType;
             }
@@ -701,7 +721,7 @@ OFCondition DcmJSONReader::parseElement(
                 // check if file path is present in our list of permitted paths
                 if (! bulkdataPathPermitted(filePathNormalized))
                 {
-                    DCMDATA_ERROR("BulkdataURI refers to a directory that is not permitted for bulk data: '" << filePath << "'");
+                    DCMDATA_ERROR("BulkDataURI refers to a directory that is not permitted for bulk data: '" << filePath << "'");
                     delete newElem;
                     return EC_InvalidFilename;
                 }
@@ -716,7 +736,7 @@ OFCondition DcmJSONReader::parseElement(
             }
             else if (isHttpURI(value))
             {
-                DCMDATA_ERROR("loading Bulkdata from http/https BulkDataURI not yet possible");
+                DCMDATA_ERROR("loading bulk data from http/https BulkDataURI not yet possible");
                 delete newElem;
                 return EC_UnsupportedURIType;
             }
@@ -729,10 +749,10 @@ OFCondition DcmJSONReader::parseElement(
         }
     }
 
-    // inlinebinary - content is base64 encoded
+    // inlinebinary - content is Base64 encoded
     else if (valueType == "inlinebinary")
     {
-        // the base64 value has to be a JSON string
+        // the Base64 value has to be a JSON string
         if (valueToken->type != JSMN_STRING)
         {
             DCMDATA_ERROR("not a valid DICOM JSON dataset: InlineBinary value must be a JSON string");
@@ -746,13 +766,27 @@ OFCondition DcmJSONReader::parseElement(
         const size_t length = OFStandard::decodeBase64(value, data);
         DCMDATA_TRACE("parsing inline binary (" << length << "): " << value << " | " << data);
         if (length > 0)
+        {
             result = storeInlineBinaryValue(*newElem, data, length);
-
-        /* delete buffer since data is copied into the element */
-        delete[] data;
+            /* delete buffer since data is copied into the element */
+            delete[] data;
+        }
+        else if (!value.empty())
+        {
+            DCMDATA_ERROR("invalid InlineBinary value: cannot decode Base64 data");
+            result = EC_InvalidJSONContent;
+        }
         if (result.bad())
         {
-            if (stopOnErrorPolicy_) return result; else result = EC_Normal;
+            if (stopOnErrorPolicy_)
+            {
+                delete newElem;
+                return result;
+            }
+            else
+            {
+                result = EC_Normal;
+            }
         }
     }
     else if (valueType == "value")
@@ -768,7 +802,7 @@ OFCondition DcmJSONReader::parseElement(
         // Sequence
         if (newElem->ident() == EVR_SQ)
         {
-            result = parseSequence(*(OFstatic_cast(DcmSequenceOfItems*, newElem)), valueToken);
+            result = parseSequence(*(OFstatic_cast(DcmSequenceOfItems*, newElem)), depth, valueToken);
         }
         else if (newElem->getTag() == DCM_PixelData)
         {
@@ -785,7 +819,15 @@ OFCondition DcmJSONReader::parseElement(
         }
         if (result.bad())
         {
-            if (stopOnErrorPolicy_) return result; else result = EC_Normal;
+            if (stopOnErrorPolicy_)
+            {
+                delete newElem;
+                return result;
+            }
+            else
+            {
+                result = EC_Normal;
+            }
         }
     }
     else
@@ -823,7 +865,7 @@ OFCondition DcmJSONReader::parseElement(
         }
         if (result.bad())
         {
-            DCMDATA_WARN("element " << dcmTag << " found twice in one data set or item, ignoring second entry");
+            DCMDATA_WARN("DcmJSONReader: element " << dcmTag << " found twice in one data set or item, ignoring second entry");
             delete newElem;
         }
     }
@@ -864,6 +906,7 @@ OFCondition DcmJSONReader::extractTag(
 
 OFCondition DcmJSONReader::parseSequence(
     DcmSequenceOfItems& sequence,
+    size_t depth,
     OFJsmnTokenPtr& current)
 {
     OFCondition result = EC_Normal;
@@ -889,7 +932,7 @@ OFCondition DcmJSONReader::parseSequence(
             sequence.insert(newItem);
 
             // proceed parsing the item content
-            result = parseDataSet(newItem, NULL, current);
+            result = parseDataSet(newItem, NULL, depth + 1, current);
             if (result.bad() && stopOnErrorPolicy_) return result;
         }
         DCMDATA_TRACE("item " << sqStart << ":" << i << " end, next up : " << current->start);
@@ -902,11 +945,18 @@ OFCondition DcmJSONReader::parseSequence(
 OFCondition DcmJSONReader::parseDataSet(
     DcmItem* dataset,
     DcmItem* metaheader,
+    size_t depth,
     OFJsmnTokenPtr& current)
 {
+    if (depth > DCMJSON_MAX_SEQUENCE_NESTING)
+    {
+        DCMDATA_ERROR("DcmJSONReader: maximum sequence nesting level " << DCMJSON_MAX_SEQUENCE_NESTING << " exceeded");
+        return EC_NestingDepthLimitExceeded;
+    }
+
     OFCondition result = EC_Normal;
 
-    // we expext a JSON object that encapsulates the DICOM dataset
+    // we expect a JSON object that encapsulates the DICOM dataset
     if (current->type != JSMN_OBJECT)
     {
         DCMDATA_ERROR("not a valid DICOM JSON dataset: datasets must be encapsulated in a JSON object");
@@ -920,7 +970,7 @@ OFCondition DcmJSONReader::parseDataSet(
     for (int i = 0; i < dsSize; i++)
     {
         // read each entry in the content object as a DICOM element
-        result = parseElement(dataset, metaheader, current);
+        result = parseElement(dataset, metaheader, depth + 1, current);
         if (result.bad() && stopOnErrorPolicy_) return result;
     }
     DCMDATA_TRACE("dataset end " << dsStart << "; next element: " << current->start);
@@ -1127,11 +1177,11 @@ OFCondition DcmJSONReader::createElement(
         // check whether "vr" attribute exists
         if (vr.empty() || vr == "")
         {
-            DCMDATA_WARN("missing 'vr' attribute for " << dcmTag
+            DCMDATA_WARN("DcmJSONReader: missing 'vr' attribute for " << dcmTag
                 << ", using the tag's VR (" << dcmTag.getVR().getVRName() << ")");
         }
         else {
-            DCMDATA_WARN("invalid 'vr' attribute (" << vr << ") for " << dcmTag
+            DCMDATA_WARN("DcmJSONReader: invalid 'vr' attribute (" << vr << ") for " << dcmTag
                 << ", using the tag's VR (" << dcmTag.getVR().getVRName() << ")");
         }
     }
@@ -1156,7 +1206,7 @@ OFCondition DcmJSONReader::createElement(
         {
             // there are inconsistencies concerning the VR in the JSON file.
             // print a warning since there may be resulting errors in the DICOM dataset
-            DCMDATA_WARN("element " << dcmTag << " has wrong VR (" << jsonVR.getVRName()
+            DCMDATA_WARN("DcmJSONReader: element " << dcmTag << " has wrong VR (" << jsonVR.getVRName()
                 << "), correct is '" << dcmTag.getVR().getVRName() << "'");
         }
 
@@ -1169,6 +1219,7 @@ OFCondition DcmJSONReader::createElement(
     if (result.bad())
     {
         DCMDATA_ERROR("failed to create DICOM element "  << dcmTag << ": " << result.text());
+        return result;
     }
 
     // if this is pixel data, create an empty unencapsulated representation
@@ -1216,9 +1267,9 @@ OFCondition DcmJSONReader::readAndConvertJSONFile(
         {
             // this is a JSON array containing a single DICOM dataset.
             // Silently ignore the array structure and parse the dataset
-            DCMDATA_DEBUG("parsing JSON array containing a single dataset");
+            DCMDATA_DEBUG("DcmJSONReader: parsing JSON array containing a single dataset");
             current++;
-            result = parseDataSet(dataset, metaheader, current);
+            result = parseDataSet(dataset, metaheader, 0, current);
         }
         else
         {
@@ -1232,25 +1283,27 @@ OFCondition DcmJSONReader::readAndConvertJSONFile(
             else if (arrayHandlingPolicy_ == 0)
             {
                 // Store multiple datasets in a private sequence.
-                DCMDATA_DEBUG("parsing JSON array containing " << current->size << " DICOM datasets");
+                DCMDATA_DEBUG("DcmJSONReader: parsing JSON array containing " << current->size << " DICOM datasets");
                 DcmTag private_reservation(0x0009,0x0010, EVR_LO);
                 DcmTag private_sequence(0x0009,0x1000, EVR_SQ);
                 DcmSequenceOfItems *newSQ = new DcmSequenceOfItems(private_sequence);
                 result = dataset->putAndInsertString(private_reservation, JSON2DCM_PRIVATE_RESERVATION);
                 if (result.good()) result = dataset->insert(newSQ);
-                if (result.good()) result = parseSequence(*newSQ, current);
+                if (result.good()) result = parseSequence(*newSQ, 0, current);
             }
             else
             {
                 // select a single dataset from the array
                 if (arrayHandlingPolicy_ > current->size)
                 {
-                    DCMDATA_ERROR("found JSON array containing " << current->size << " DICOM datasets, cannot store dataset no. " << arrayHandlingPolicy_);
+                    DCMDATA_ERROR("found JSON array containing " << current->size
+                        << " DICOM datasets, cannot store dataset no. " << arrayHandlingPolicy_);
                     result = EC_InvalidJSONContent;
                 }
                 else
                 {
-                    DCMDATA_DEBUG("selecting dataset " << arrayHandlingPolicy_ << " from JSON array containing " << current->size << " DICOM datasets");
+                    DCMDATA_DEBUG("DcmJSONReader: selecting dataset " << arrayHandlingPolicy_
+                        << " from JSON array containing " << current->size << " DICOM datasets");
 
                     // move "current" to the token representing the first dataset
                     current++;
@@ -1267,7 +1320,7 @@ OFCondition DcmJSONReader::readAndConvertJSONFile(
                     }
 
                     // extract the single dataset at the target location
-                    result = parseDataSet(dataset, metaheader, current);
+                    result = parseDataSet(dataset, metaheader, 0, current);
                 }
             }
         }
@@ -1275,8 +1328,8 @@ OFCondition DcmJSONReader::readAndConvertJSONFile(
     else
     {
         // we expect a single dataset here, parseDataSet() will check if it is the right JSON structure
-        DCMDATA_DEBUG("parsing single JSON dataset");
-        result = parseDataSet(dataset, metaheader, current);
+        DCMDATA_DEBUG("DcmJSONReader: parsing single JSON dataset");
+        result = parseDataSet(dataset, metaheader, 0, current);
     }
 
     if (!stopOnErrorPolicy_) result = EC_Normal;
@@ -1558,7 +1611,23 @@ OFCondition DcmJSONReader::loadBulkdataFile(
 {
     // open file for reading
     OFFile file;
+#ifdef _WIN32
     if (! file.fopen(filepath, "rb"))
+#else
+    // On Posix systems, use O_NOFOLLOW to prevent a race condition
+    // between the call to realpath() and this call that might allow
+    // a malicious attacker to replace the input directory with
+    // a symbolic link pointing somewhere else, thus causing a file
+    // outside the permitted path to be read. Since realpath()
+    // resolves all symbolic links, an error caused by O_NOFOLLOW
+    // can only occur in this situation.
+    int fd = open(filepath.c_str(), O_RDONLY | O_NOFOLLOW);
+    if (fd < 0)
+    {
+        return EC_InvalidFilename;
+    }
+    if (! file.fdopen(fd, "rb"))
+#endif
     {
         OFString s("(unknown error code)");
         file.getLastErrorString(s);

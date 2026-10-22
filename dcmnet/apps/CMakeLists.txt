@@ -29,7 +29,7 @@ endif()
 foreach(PROGRAM dcmsend termscu)
   DCMTK_TARGET_LINK_MODULES(${PROGRAM} dcmnet)
 endforeach()
-foreach(PROGRAM dcmrecv echoscu findscu storescp storescu getscu movescu)
+foreach(PROGRAM dcmrecv echoscu findscu storescp storescu getscu movescu testscu)
   DCMTK_TARGET_LINK_MODULES(${PROGRAM} dcmtls)
 endforeach()
 

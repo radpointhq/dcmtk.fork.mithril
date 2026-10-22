@@ -131,6 +131,14 @@ where
  ApplicationTitle - string value
  StorageArea      - string value
  Access           - access format: "R" or "RW" or "W"
+                    with "R"  - read-only:  query/retrieve (C-FIND/C-MOVE/
+                                            C-GET) permitted, storage (C-STORE)
+                                            refused
+                         "RW" - read/write: both query/retrieve and storage
+                                            permitted
+                         "W"  - write-only: storage (C-STORE) permitted,
+                                            query/retrieve refused
+                    (C-ECHO is permitted regardless of the access mode)
  Quota            - quota format: ( maxStudies, maxBytesPerStudy )
                     with maxStudies       - integer value
                          maxBytesPerStudy - string value

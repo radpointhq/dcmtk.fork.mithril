@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2020, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -13,7 +13,7 @@
  *
  *  Module:  ofstd
  *
- *  Author:  Joerg Riesmeier
+ *  Author:  Joerg Riesmeier, Harald Roesen
  *
  *  Purpose: Combined class for date and time functions
  *
@@ -76,7 +76,7 @@ class DCMTK_OFSTD_EXPORT OFDateTime
                const unsigned int hour,
                const unsigned int minute,
                const double second,
-               const double timeZone = 0);
+               const double timeZone = OFTime::unspecifiedTimeZone);
 
     /** destructor
      */
@@ -147,7 +147,8 @@ class DCMTK_OFSTD_EXPORT OFDateTime
     virtual OFBool operator>(const OFDateTime &dateTime) const;
 
     /** reset the date/time value.
-     *  Sets all date and all time components to '0'. NB: Date becomes invalid.
+     *  Sets all date and all time components to "0" (or "unspecified" in case of the time
+     *  zone). Please note that the date becomes invalid.
      */
     virtual void clear();
 
@@ -158,7 +159,7 @@ class DCMTK_OFSTD_EXPORT OFDateTime
     virtual OFBool isValid() const;
 
     /** set the date/time value.
-     *  Before the new value is set it is checked using the "isValid()" routine.
+     *  Before the new value is set, it is checked using the isValid() method.
      *  @param year new year value to be set
      *  @param month new month value to be set
      *  @param day new day value to be set
@@ -174,24 +175,24 @@ class DCMTK_OFSTD_EXPORT OFDateTime
                        const unsigned int hour,
                        const unsigned int minute,
                        const double second,
-                       const double timeZone = 0);
+                       const double timeZone = OFTime::unspecifiedTimeZone);
 
     /** set the date component to the specified date.
-     *  Before the new value is set it is checked using the "isValid()" routine.
+     *  Before the new value is set, it is checked using the isValid() method.
      *  @param dateVal new date value to be set
      *  @return OFTrue if the new value is valid and has been set, OFFalse otherwise
      */
     OFBool setDate(const OFDate &dateVal);
 
     /** set the time component to the specified time.
-     *  Before the new value is set it is checked using the "isValid()" routine.
+     *  Before the new value is set, it is checked using the isValid() method.
      *  @param timeVal new time value to be set
      *  @return OFTrue if the new value is valid and has been set, OFFalse otherwise
      */
     OFBool setTime(const OFTime &timeVal);
 
     /** set the date and time component to the specified date/time.
-     *  Before the new value is set it is checked using the "isValid()" routine.
+     *  Before the new value is set, it is checked using the isValid() method.
      *  @param dateVal new date value to be set
      *  @param timeVal new time value to be set
      *  @return OFTrue if the new value is valid and has been set, OFFalse otherwise
@@ -201,17 +202,23 @@ class DCMTK_OFSTD_EXPORT OFDateTime
 
     /** set the date and time value to the current system date and time.
      *  This function uses operating system dependent routines. If the date or time function
-     *  (or both) are unavailable for some reason the corresponding value is not modified.
+     *  (or both) are unavailable for some reason, the corresponding value is not modified.
      *  @return OFTrue if the current system date and time has been set, OFFalse otherwise
      */
     OFBool setCurrentDateTime();
 
     /** set the date/time value to the given ISO formatted date/time string.
-     *  The two ISO date/time formats supported by this function are
-     *  - "YYYY-MM-DD HH:MM[:SS [&ZZ:ZZ]]" (with arbitrary delimiters) and
-     *  - "YYYYMMDDHHMM[SS[&ZZZZ]]" (without delimiters, useful for DICOM datetime type)
-     *  where the brackets enclose optional parts. Please note that the optional fractional
-     *  part of a second ".FFFFFF" (see getISOFormattedDateTime()) is not yet supported.
+     *  The most common ISO date/time formats supported by this function are
+     *  - "YYYY-MM-DD HH:MM[:SS[.FFFFFF]] [&ZZ:ZZ]" (with arbitrary delimiters),
+     *  - "YYYY-MM-DD'T'HH:MM[:SS[.FFFFFF]][&ZZ:ZZ]" (according to ISO 8601) and
+     *  - "YYYYMMDDHHMM[SS[.FFFFFF]][&ZZZZ]" (without delimiters, useful for DICOM datetime type)
+     *
+     *  where the brackets enclose optional parts, the 'T' stands for the literal symbol "T", and
+     *  the "&" is a placeholder for the sign symbol ("+" or "-"). The pattern "FFFFFF" contains a
+     *  fractional part of a second. If specified, it shall contain one to six digits representing
+     *  a range from 0 to 999999.
+     *  In the first two formats listed, spaces between date, time and time zone components are
+     *  accepted. Leading or trailing spaces are never accepted.
      *  @param formattedDateTime ISO formatted date/time value to be set
      *  @return OFTrue if input is valid and result variable has been set, OFFalse otherwise
      */
@@ -228,22 +235,29 @@ class DCMTK_OFSTD_EXPORT OFDateTime
     const OFTime &getTime() const;
 
     /** get the current date/time value in ISO format.
-     *  The two ISO time formats supported by this function are
-     *  - "YYYY-MM-DD HH:MM[:SS[.FFFFFF]] [&ZZ:ZZ]" (with delimiters) and
+     *  The ISO time formats supported by this function are
+     *  - "YYYY-MM-DD HH:MM[:SS[.FFFFFF]] [&ZZ:ZZ]" (with delimiters),
+     *  - "YYYY-MM-DD'T'HH:MM[:SS[.FFFFFF]][&ZZ:ZZ]" (according to ISO 8601) and
      *  - "YYYYMMDDHHMM[SS[.FFFFFF]][&ZZZZ]" (without delimiters, useful for DICOM datetime type)
-     *  where the brackets enclose optional parts.
+     *
+     *  where the brackets enclose optional parts, the 'T' stands for the literal symbol "T", and
+     *  the "&" is a placeholder for the sign symbol ("+" or "-").
      *  @param formattedDateTime reference to string variable where the result is stored
-     *  @param showSeconds add optional seconds (":SS" or "SS") to the resulting string if OFTrue
+     *  @param showSeconds add optional seconds (":SS" or "SS") to the resulting string if OFTrue.
+     *    By default, the seconds are only added if a value is specified.
      *  @param showFraction add optional fractional part of a second (".FFFFFF") if OFTrue.
-     *    Requires parameter 'seconds' to be also OFTrue.
+     *    Requires parameter 'seconds' to be also OFTrue. By default, the fractional part is only
+     *    added if the second value is not an integer (see OFTime::hasFractionOfSecond()).
      *  @param showTimeZone add optional time zone ("&ZZ:ZZ" or "&ZZZZ") to the resulting string
      *    if OFTrue. The time zone indicates the offset from the Coordinated Universal Time (UTC)
-     *    in hours and minutes. The "&" is a placeholder for the sign symbol ("+" or "-").
+     *    in hours and minutes. The time zone is only added if a value is specified.
      *  @param showDelimiter flag, indicating whether to use delimiters ("-", ":" and " ") or not
-     *  @param dateTimeSeparator separator between ISO date and time value. Only used if
-     *    'showDelimiter' is true.
-     *  @param timeZoneSeparator separator between ISO time value and time zone. Only used if
-     *    'showDelimiter' is true.
+     *  @param createMissingPart if OFTrue, create optional parts (seconds and fractional part of a
+     *    second) even if not specified (see OFTime::hasSecond() and OFTime::hasFractionOfSecond())
+     *  @param dateTimeSeparator separator between ISO date and time value, e.g. " " (default) or
+     *    "T" (for ISO 8601 format). Only used if 'showDelimiter' is true.
+     *  @param timeZoneSeparator separator between ISO time value and time zone, e.g. " " (default)
+     *    or "" (for ISO 8601 format). Only used if 'showDelimiter' is true.
      *  @return OFTrue if result variable has been set, OFFalse otherwise
      */
     OFBool getISOFormattedDateTime(OFString &formattedDateTime,
@@ -251,6 +265,7 @@ class DCMTK_OFSTD_EXPORT OFDateTime
                                    const OFBool showFraction = OFFalse,
                                    const OFBool showTimeZone = OFFalse,
                                    const OFBool showDelimiter = OFTrue,
+                                   const OFBool createMissingPart = OFFalse,
                                    const OFString &dateTimeSeparator = " ",
                                    const OFString &timeZoneSeparator = " ") const;
 
@@ -278,12 +293,14 @@ class DCMTK_OFSTD_EXPORT OFDateTime
 
 
 /** put the given date/time in ISO format on the output stream.
- *  If an error occurs nothing is printed.
+ *  The output format is "YYYY-MM-DD HH:MM[:SS[.FFFFFF]] [&ZZ:ZZ]". Optional parts are not
+ *  created if missing. If an error occurs, nothing is printed.
  *  @param stream output stream
  *  @param time OFDateTime object to print
  *  @return reference to the output stream
  */
-DCMTK_OFSTD_EXPORT STD_NAMESPACE ostream& operator<<(STD_NAMESPACE ostream& stream, const OFDateTime &dateTime);
+DCMTK_OFSTD_EXPORT STD_NAMESPACE ostream &operator<<(STD_NAMESPACE ostream &stream,
+                                                     const OFDateTime &dateTime);
 
 
 #endif

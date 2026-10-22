@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2002-2024, OFFIS e.V.
+ *  Copyright (C) 2002-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -182,8 +182,14 @@ OFCondition DcmRLECodecEncoder::encode(
       numberOfStripes = bytesAllocated * samplesPerPixel;
       if (numberOfStripes > 15) result = EC_CannotChangeRepresentation;
 
-      // make sure that we have at least as many bytes of pixel data as we expect
-      if (numberOfStripes * columns * rows * numberOfFrames > length) result = EC_CannotChangeRepresentation;
+      // make sure that we have at least as many bytes of pixel data as we expect;
+      // compute the expected size in 64-bit arithmetic to avoid an integer overflow
+      // that would let a too-small Pixel Data element pass this check and subsequently
+      // cause an out-of-bounds read in the stripe encoding loop below
+      const Uint64 expectedFrameSize = OFstatic_cast(Uint64, numberOfStripes) * columns * rows;
+      if ((expectedFrameSize > OFstatic_cast(Uint64, length)) ||
+          (expectedFrameSize * OFstatic_cast(Uint64, numberOfFrames) > OFstatic_cast(Uint64, length)))
+        result = EC_CannotChangeRepresentation;
     }
 
     DcmPixelSequence *pixelSequence = NULL;

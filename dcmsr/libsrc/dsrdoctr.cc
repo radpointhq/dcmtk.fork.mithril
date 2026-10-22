@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2024, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -99,10 +99,10 @@ OFCondition DSRDocumentTree::read(DcmItem &dataset,
     OFCondition result = changeDocumentType(documentType, OFTrue /*deleteTree*/);
     if (result.good())
     {
-        if (ConstraintChecker == NULL)
+        if (!hasConstraintChecker())
             DCMSR_WARN("Check for relationship content constraints not yet supported");
         else if (ConstraintChecker->isTemplateSupportRequired())
-            DCMSR_WARN("Check for template constraints not yet supported");
+            DCMSR_WARN("Check for template constraints not yet fully supported");
         if (flags & RF_showCurrentlyProcessedItem)
             DCMSR_INFO("Processing content item 1");
         /* first try to read value type */
@@ -181,7 +181,7 @@ OFCondition DSRDocumentTree::readXML(const DSRXMLDocument &doc,
                                      const size_t flags)
 {
     OFCondition result = SR_EC_CorruptedXMLStructure;
-    if (ConstraintChecker == NULL)
+    if (!hasConstraintChecker())
         DCMSR_WARN("Check for relationship content constraints not yet supported");
     else if (ConstraintChecker->isTemplateSupportRequired())
         DCMSR_WARN("Check for template constraints not yet supported");

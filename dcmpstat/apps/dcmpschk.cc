@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2000-2024, OFFIS e.V.
+ *  Copyright (C) 2000-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -30,6 +30,7 @@
 #include "dcmtk/dcmpstat/dcmpstat.h"   /* for DcmPresentationState */
 #include "dcmtk/dcmpstat/dvpsri.h"     /* for dcmPresentationStateValidationMode */
 #include "dcmtk/ofstd/ofstd.h"
+#include "dcmtk/ofstd/ofmem.h"          /* for OFunique_ptr */
 
 #ifdef WITH_ZLIB
 #include <zlib.h>                      /* for zlibVersion() */
@@ -319,7 +320,8 @@ static int checkelem(
        if (isaStringVR(vr)) {
            /* only strings have variable length components */
            char* value = NULL;
-        ((DcmByteString*)elem)->getString(value);
+        if (EC_Normal == ((DcmByteString*)elem)->getString(value))
+        {
 
            char **fields = new char*[vm+1];
            if (fields == NULL) {
@@ -331,6 +333,9 @@ static int checkelem(
                    printResult(stack, showFullData);
                    OFLOG_FATAL(dcmpschkLogger, "Internal error: splitFields inconsistency ("
                        << nfields << "!=" << vm << ")");
+                   for (i = 0; i < nfields; i++)
+                       delete[] fields[i];
+                   delete[] fields;
                    exit(1);
                }
                for (i=0; (Uint32)i<vm; i++) {
@@ -362,6 +367,7 @@ static int checkelem(
                }
                delete[] fields;
            }
+        }
        } else {
            Uint32 componentSize = len; /* vm is 0 if value field is too short, e.g. < 8 bytes for FD */
            if (vm>0) componentSize = len/vm;
@@ -605,7 +611,7 @@ static int dcmchk(
   OFBool loadAllDataInMemory,
   int& dderrors)
 {
-    DcmFileFormat *ds = new DcmFileFormat();
+    OFunique_ptr<DcmFileFormat> ds(new DcmFileFormat());
 
     OFCondition cond = ds->loadFile(ifname, xfer, EGL_noChange, DCM_MaxReadLength, readMode);
     if (! cond.good())
@@ -619,7 +625,7 @@ static int dcmchk(
         {
             OFLOG_ERROR(dcmpschkLogger, ds->error().text()
                 << " reading file: " << ifname);
-            return 1;
+            return 1;  // ds released by RAII
         }
     }
 
@@ -636,9 +642,7 @@ static int dcmchk(
     oxfer = ds->getDataset()->getOriginalXfer();
     checkitem(ds->getDataset(), oxfer, stack, showFullData, dderrors);
 
-    delete ds;
-
-    return 0;
+    return 0;  // ds released by RAII
 }
 
 //*********************************************************

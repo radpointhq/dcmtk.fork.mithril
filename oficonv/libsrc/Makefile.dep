@@ -130,7 +130,7 @@ citrus_mapper.o: citrus_mapper.c \
  ../../config/include/dcmtk/config/osconfig.h citrus_mapper.h \
  citrus_bcs.h citrus_mapper_local.h citrus_types.h citrus_module.h \
  citrus_hash.h citrus_region.h citrus_lock.h citrus_memstream.h \
- citrus_mmap.h oficonv_strlcpy.h
+ citrus_mmap.h citrus_csmapper.h oficonv_strlcpy.h
 citrus_mapper_646.o: citrus_mapper_646.c \
  ../../config/include/dcmtk/config/osconfig.h citrus_mapper_646.h \
  citrus_mapper_local.h citrus_types.h citrus_module.h citrus_bcs.h \

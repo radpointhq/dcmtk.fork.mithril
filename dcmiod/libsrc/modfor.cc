@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 2015-2024, Open Connections GmbH
+ *  Copyright (C) 2015-2026, Open Connections GmbH
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation are maintained by
@@ -26,6 +26,19 @@
 #include "dcmtk/dcmdata/dcvrui.h"
 #include "dcmtk/dcmiod/iodutil.h"
 
+// Per-class default IODRules shared across instances (copy-on-write; see
+// IODComponent). Must live at namespace scope, not inside a function: in
+// C++98 the initialization of function-local statics is not thread-safe,
+// and that applies to the OFMutex itself -- a mutex cannot guard its own
+// construction. Namespace-scope statics are initialized before main() on
+// the single startup thread, so both objects are guaranteed ready when
+// user threads first try to lock.
+namespace
+{
+OFshared_ptr<IODRules> s_defaultRules;
+OFMutex s_defaultRulesMutex;
+}
+
 const OFString IODFoRModule::m_ModuleName = "FrameOfReferenceModule";
 
 IODFoRModule::IODFoRModule(OFshared_ptr<DcmItem> item, OFshared_ptr<IODRules> rules)
@@ -43,9 +56,28 @@ IODFoRModule::IODFoRModule()
 
 void IODFoRModule::resetRules()
 {
-    // parameters are tag, VM, type. Overwrite old rules if any.
-    m_Rules->addRule(new IODRule(DCM_FrameOfReferenceUID, "1", "1", getName(), DcmIODTypes::IE_FOR), OFTrue);
-    m_Rules->addRule(new IODRule(DCM_PositionReferenceIndicator, "1", "2", getName(), DcmIODTypes::IE_FOR), OFTrue);
+    s_defaultRulesMutex.lock();
+    if (!s_defaultRules)
+    {
+        s_defaultRules.reset(new IODRules());
+        s_defaultRules->addRule(new IODRule(DCM_FrameOfReferenceUID, "1", "1", getName(), DcmIODTypes::IE_FOR), OFTrue);
+        s_defaultRules->addRule(new IODRule(DCM_PositionReferenceIndicator, "1", "2", getName(), DcmIODTypes::IE_FOR), OFTrue);
+    }
+    s_defaultRulesMutex.unlock();
+    if (!m_ExternalRules)
+    {
+        m_Rules       = s_defaultRules;
+        m_HasOwnRules = OFFalse;
+    }
+    else
+    {
+        IODRules::iterator it = s_defaultRules->begin();
+        while (it != s_defaultRules->end())
+        {
+            m_Rules->addRule(it->second->clone(), OFTrue);
+            ++it;
+        }
+    }
 }
 
 OFString IODFoRModule::getName() const

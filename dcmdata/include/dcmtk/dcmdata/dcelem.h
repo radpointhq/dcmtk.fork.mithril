@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright (C) 1994-2025, OFFIS e.V.
+ *  Copyright (C) 1994-2026, OFFIS e.V.
  *  All rights reserved.  See COPYRIGHT file for details.
  *
  *  This software and supporting documentation were developed by
@@ -251,7 +251,7 @@ class DCMTK_DCMDATA_EXPORT DcmElement
      *  @param vm value multiplicity (according to the data dictionary) to be checked for.
      *    (See DcmElement::checkVM() for a list of valid values.)
      *    Interpreted as cardinality (number of items) for sequence attributes.
-     *  @param oldFormat support old ACR/NEMA format for certain VRs (DA, TM, PN) if OFTrue
+     *  @param oldFormat support old ACR-NEMA format for certain VRs (DA, TM, PN) if OFTrue
      *  @return status of the check, EC_Normal if value is correct, an error code otherwise
      */
     virtual OFCondition checkValue(const OFString &vm = "1-n",
@@ -797,8 +797,14 @@ class DCMTK_DCMDATA_EXPORT DcmElement
      *    per frame and multiple frames are present in the dataset, and the offset
      *    table is empty.
      *  @param buffer pointer to buffer allocated by the caller. The buffer
-     *    must be large enough for one frame of this image.
-     *  @param bufSize size of buffer, in bytes
+     *    must be large enough for one frame of this image and should be an
+     *    even number of bytes, to allow for byte order adjustment.
+     *    The frame will be stored in the same format that is also produced
+     *    by decode(), i.e. pixel data arranged in 16-bit words (corresponding
+     *    to the OW value representation for uncompressed pixel data),
+     *    byte-swapped to the local endianness of the machine.
+     *  @param bufSize size of buffer, in bytes. This number must be even so
+     *    that the data can properly be converted to a different endianness.
      *  @param decompressedColorModel upon successful return, the color model
      *    of the decompressed image (which may be different from the one used
      *    in the compressed images) is returned in this parameter.
@@ -959,7 +965,7 @@ class DCMTK_DCMDATA_EXPORT DcmElement
   protected:
 
     /** This function returns this element's value. The returned value corresponds to the
-     *   byte ordering (little or big endian) that was passed.
+     *  byte ordering (little or big endian) that was passed.
      *  @param newByteOrder The byte ordering that shall be accounted
      *                      for (little or big endian).
      */

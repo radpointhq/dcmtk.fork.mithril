@@ -41,6 +41,7 @@ doxygen/dcmtk.tag
 # Ignore built binary files
 */tests/tests
 dcmapps/apps/dcm2img
+dcmapps/apps/dcmtk
 dcmdata/apps/cda2dcm
 dcmdata/apps/dcm2cda
 dcmdata/apps/dcm2json

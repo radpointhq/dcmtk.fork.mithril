@@ -1,8 +1,10 @@
 # declare executables
 DCMTK_ADD_TEST_EXECUTABLE(dcmnet_tests
+  tassocleak.cc
   tdimse.cc
   tdump.cc
   tests.cc
+  tparseassoc.cc
   tpool.cc
   tscuscp.cc
   tscusession.cc
